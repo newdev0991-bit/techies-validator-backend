@@ -1,4 +1,4 @@
-// server.js  (OpenAI version shown; works the same if you use Gemini inside the handler)
+// server.js — OpenAI backend (ESM). package.json should include: { "type": "module" }
 import express from 'express';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
@@ -6,49 +6,28 @@ import rateLimit from 'express-rate-limit';
 const app = express();
 const PORT = process.env.PORT || 4000;
 
-// ----- CORS allowlist (supports FRONTEND_ORIGIN or ALLOWED_ORIGINS with commas) -----
+/* ---------- CORS allowlist (Vercel + localhost) ---------- */
 const rawAllow = process.env.FRONTEND_ORIGIN || process.env.ALLOWED_ORIGINS || '';
-const allowlist = [
-  'http://localhost:3000',           // local dev
-  rawAllow
-].flatMap(v => (v ? v.split(',') : []))
- .map(s => s.trim())
- .filter(Boolean);
+const allowlist = ['http://localhost:3000', ...rawAllow.split(',').map(s => s.trim()).filter(Boolean)];
 
-// CORS options: allow any origin if allowlist empty, else only exact matches
 const corsOptions = {
   origin(origin, cb) {
-    if (!origin) return cb(null, true);        // curl/Postman/no-origin
-    if (allowlist.length === 0) return cb(null, true);
-    if (allowlist.includes('*')) return cb(null, true);
-    if (allowlist.some(a => origin === a)) return cb(null, true);
-    return cb(new Error('Not allowed by CORS'), false);
+    if (!origin) return cb(null, true);            // curl/Postman/no-origin
+    return allowlist.includes(origin) ? cb(null, true) : cb(new Error('Not allowed by CORS'), false);
   },
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: false,
-  maxAge: 86400,
+  maxAge: 86400
 };
-
 app.use(cors(corsOptions));
-app.options('*', cors(corsOptions));           // <-- handle preflight
-
+app.options('*', cors(corsOptions));               // preflight
 app.use(express.json({ limit: '1mb' }));
 app.use(rateLimit({ windowMs: 60_000, max: 60 }));
 
 app.get('/health', (_req, res) => res.json({ ok: true, provider: 'openai' }));
 
-// ---------- shared handler ----------
-async function analyzeHandler(req, res) {
-  try {
-    const { lead } = req.body || {};
-    if (!lead) return res.status(400).json({ error: 'Lead data is required.' });
-
-    // 1) NEW system message with explicit lowercase 'json'
-    const system = 'You are a strict formatter. Output must be a single valid json object only. No explanations, no code fences.';
-
-    // 2) Ensure the user prompt also contains lowercase 'json'
-    const prompt = `You are an expert business lead validator for UK B2B.
+function buildPrompt(lead) {
+  return `You are an expert business lead validator. Analyze this business lead and determine if it's a good prospect for a UK-based B2B sales team.
 
 LEAD DATA:
 - Company Name: ${lead['Company Name'] || 'Not provided'}
@@ -61,37 +40,76 @@ LEAD DATA:
 - County: ${lead['County'] || 'Not provided'}
 - Old Address: ${lead['Old Address? (For relocation, new branch, and moving premises only with no given address)'] || 'Not provided'}
 
-Return a single valid json object ONLY with these keys:
+VALIDATION CONTEXT:
+You're evaluating leads for a UK-based B2B service company. Good leads are:
+- New businesses or grand openings (recently opened within days/weeks)
+- Business relocations or expansions to new locations
+- New ownership/management changes
+- Businesses that genuinely need B2B services (restaurants, retail shops, offices, salons, etc.)
+- Must have phone numbers for contact
+- Must be in serviceable UK locations
+
+Bad leads are:
+- Education sector (schools, academies, nurseries, tutoring centers, training centers)
+- Businesses that have been open for months/years already
+- Non-commercial entities (churches, charities, personal blogs, family businesses)
+- Locations outside UK mainland or in banned areas (Ireland, Northern Ireland, Guernsey, Jersey, Isle of Man)
+- Businesses clearly not needing B2B services
+- Missing essential contact information
+
+CRITICAL FACTORS TO CONSIDER:
+1. Timing: Is this truly a NEW opportunity or an established business?
+2. Business Type: Does this business type typically need B2B services?
+3. Contact Info: Can they actually be reached for sales outreach?
+4. Location: Is this in a serviceable area?
+5. Opportunity Quality: How likely is this to convert to a sale?
+
+Analyze this lead carefully and provide your assessment in json format:
+
 {
   "verdict": "GOOD" | "BAD" | "UNCLEAR",
   "reasoning": "Detailed explanation focusing on timing, business type, and sales opportunity potential",
   "confidence": 85,
-  "key_factors": ["Primary reasons"],
-  "red_flags": ["Concerns"],
+  "key_factors": ["Primary reasons for this verdict"],
+  "red_flags": ["Any concerns or negative indicators"],
   "opportunity_score": 75,
-  "recommended_action": "Specific next step"
-}`;
+  "recommended_action": "Specific next step recommendation"
+}
 
-    const key = process.env.OPENAI_API_KEY;
-    if (!key) return res.status(500).json({ error: 'Missing OPENAI_API_KEY on server.' });
+Your entire response MUST ONLY be a single, valid json object. DO NOT respond with anything other than json.`;
+}
+
+async function analyzeHandler(req, res) {
+  try {
+    const { lead } = req.body || {};
+    if (!lead) return res.status(400).json({ error: 'Lead data is required.' });
+
+    const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+    if (!OPENAI_API_KEY) return res.status(500).json({ error: 'Missing OPENAI_API_KEY on server.' });
 
     const model = process.env.MODEL || 'gpt-4o-mini';
     const base = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1/chat/completions';
 
+    const systemMsg =
+      'You are a strict formatter. Output must be a single valid json object only (note the lowercase word "json"). ' +
+      'Include every key from the schema with non-empty strings; if information is unknown, write "Insufficient information". ' +
+      'Do not add extra keys, code fences, or commentary.';
+
     const r = await fetch(base, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${OPENAI_API_KEY}`
+      },
       body: JSON.stringify({
         model,
-        // 3) Include the system message
         messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: prompt }
+          { role: 'system', content: systemMsg },         // contains lowercase "json" to satisfy JSON mode policy
+          { role: 'user', content: buildPrompt(lead) }
         ],
         temperature: 0.2,
-        max_tokens: 800,
-        // 4) Keep JSON mode enabled
-        response_format: { type: 'json_object' }
+        max_tokens: 900,
+        response_format: { type: 'json_object' }          // JSON mode
       })
     });
 
@@ -102,19 +120,19 @@ Return a single valid json object ONLY with these keys:
     }
 
     const data = JSON.parse(raw);
-    const responseText = data?.choices?.[0]?.message?.content || '{}';
-    return res.json({ content: [{ text: responseText }] });
+    const text = data?.choices?.[0]?.message?.content ?? '{}';
+
+    // Keep the frontend contract identical to your Claude version
+    return res.json({ content: [{ text }] });
   } catch (e) {
-    console.error('Validate error:', e);
+    console.error('Analyze error:', e);
     return res.status(500).json({ error: 'Failed to get AI analysis.' });
   }
 }
 
-
-// expose BOTH routes so either frontend path works
 app.post('/validate', analyzeHandler);
 app.post('/analyze', analyzeHandler);
 
 app.listen(PORT, () => {
-  console.log(`Backend listening on ${PORT}. Allowlist:`, allowlist);
+  console.log(`OpenAI backend listening on ${PORT}. Allowlist:`, allowlist);
 });
