@@ -124,6 +124,16 @@ function calculateLeadFreshness(posted_at_iso) {
 }
 
 function buildPrompt(lead) {
+  // Format previousPosts array into readable list
+  const previousPosts = lead?.fetchResults?.rawData?.previousPosts || lead?.fetchResults?.previousPosts || [];
+  const postsCount = Array.isArray(previousPosts) ? previousPosts.length : 0;
+  const formattedPosts = Array.isArray(previousPosts) && previousPosts.length > 0
+    ? previousPosts.slice(0, 10).map((post, idx) => `${idx + 1}. ${post}`).join('\n  ')
+    : 'No previous posts available';
+
+  // Extract post caption/text
+  const postCaption = lead?.fetchResults?.rawData?.postText || lead?.fetchResults?.postText || 'Not provided';
+
   return `You are an expert business lead validator. Analyze this business lead and determine if it's a good prospect for a UK-based B2B sales team.
 
 LEAD DATA:
@@ -136,7 +146,10 @@ LEAD DATA:
 - Proof URL: ${lead['Lead Proof URL'] || 'Not provided'}
 - County: ${lead['County'] || 'Not provided'}
 - Old Address: ${lead['Old Address? (For relocation, new branch, and moving premises only with no given address)'] || 'Not provided'}
-- posted_at_iso: ${lead?.fetchResults?.rawData?.posted_at_iso || 'Not provided'}
+- Posted At: ${lead?.fetchResults?.rawData?.posted_at_iso || 'Not provided'}
+- Post Caption/Text: ${postCaption}
+- Previous Posts (Total: ${postsCount}):
+  ${formattedPosts}
 
 VALIDATION CONTEXT:
 You're evaluating leads for a UK-based B2B service company. Good leads are:
@@ -147,6 +160,16 @@ You're evaluating leads for a UK-based B2B service company. Good leads are:
 - Must have phone numbers for contact
 - Must be in serviceable UK locations
 
+SEMANTIC INDICATORS TO LOOK FOR IN POST CAPTION:
+✓ New business: "grand opening", "now open", "officially open", "opening soon", "soft opening"
+✓ Relocation: "new location", "we've moved", "relocated to", "moving to", "new address", "new premises"
+✓ New ownership: "under new management", "new owner", "taken over", "new ownership"
+✓ Business context: Must mention the business itself is new/moving, not just a product/service
+
+POSTING HISTORY ANALYSIS:
+✓ New business page: Few total posts (< 20), irregular posting, recently created
+✓ Established business: Many posts (> 50), regular posting history, consistent engagement
+
 Bad leads are:
 - Education sector (schools, academies, nurseries, tutoring centers, training centers)
 - Businesses that have been open for months/years already
@@ -155,24 +178,89 @@ Bad leads are:
 - Businesses clearly not needing B2B services
 - Missing essential contact information
 
+MINOR UPDATES TO REJECT (Not new businesses):
+✗ New products/services: "new menu", "new items", "new pricelist", "new services", "new offers"
+✗ Cosmetic changes: "new decor", "new look", "renovated", "refurbished", "new paint"
+✗ Partial expansions: "upstairs only", "new section", "new floor", "expansion area"
+✗ Equipment/furniture: "new equipment", "new furniture", "new stand", "new display"
+✗ Referrals to other businesses: "check out [other business]", "shoutout to", "visit our friends"
+✗ Staff changes only: "new staff", "new team member" (unless combined with "new ownership")
+
 CRITICAL FACTORS TO CONSIDER:
-1. Timing: Is this truly a NEW opportunity or an established business?
-2. Business Type: Does this business type typically need B2B services?
-3. Contact Info: Can they actually be reached for sales outreach?
-4. Location: Is this in a serviceable area?
-5. Opportunity Quality: How likely is this to convert to a sale?
+1. Caption Analysis (50% weight):
+   - Does the post caption explicitly mention the BUSINESS is new/opening/relocating?
+   - Is it just announcing a minor update (new product/menu/pricelist)?
+   - Look for opening/relocation keywords vs. product update keywords
+
+2. Post History Analysis (50% weight):
+   - How many total previous posts exist?
+   - Is this a brand new page (< 20 posts) or established (> 50 posts)?
+   - Does posting pattern suggest new business or regular updates from existing business?
+
+3. Combined Signal:
+   - GOOD: Opening keywords + sparse post history (new business)
+   - GOOD: Relocation keywords + established history (existing business moving)
+   - BAD: Product update keywords + established history (just a new menu item)
+   - BAD: Opening keywords + 100+ posts (likely false positive)
+
+4. Business Type: Does this business type typically need B2B services?
+5. Contact Info: Can they actually be reached for sales outreach?
+6. Location: Is this in a serviceable UK area?
+7. Opportunity Quality: How likely is this to convert to a sale?
+
 (Note: Freshness checking is handled automatically by the system - focus on business quality analysis)
+
+EXAMPLE SCENARIOS:
+
+GOOD LEADS:
+- "Grand opening this Saturday! Come visit our new restaurant at 123 Main St"
+  → Caption: Opening keywords ✓, Post history: 5 posts (new page) ✓ → GOOD
+
+- "We've relocated! Find us at our new premises on Oak Road"
+  → Caption: Relocation keywords ✓, Post history: 80 posts (established) ✓ → GOOD
+
+- "Under new management! The cafe has been taken over and we're excited to serve you"
+  → Caption: New ownership keywords ✓ → GOOD
+
+BAD LEADS:
+- "Check out our new menu! Fresh items added this week"
+  → Caption: Product update ✗, Post history: 200 posts ✗ → BAD
+
+- "New pricelist for 2024! Updated rates below"
+  → Caption: Pricelist update ✗ → BAD
+
+- "Our new store stand looks amazing! Come see the display"
+  → Caption: Equipment update ✗ (stand only, not business) → BAD
+
+- "Upstairs section now open! More seating available"
+  → Caption: Partial expansion ✗ (not full opening) → BAD
+
+- "Shoutout to [Business Name] for their grand opening!"
+  → Caption: Referring to other business ✗ → BAD
 
 Analyze this lead carefully and provide your assessment in json format:
 
 {
   "verdict": "GOOD" | "BAD" | "UNCLEAR",
-  "reasoning": "Detailed explanation focusing on timing, business type, and sales opportunity potential",
+  "reasoning": "Detailed explanation focusing on caption analysis, post history, timing, and business type",
   "confidence": 85,
   "key_factors": ["Primary reasons for this verdict"],
   "red_flags": ["Any concerns or negative indicators"],
   "opportunity_score": 75,
-  "recommended_action": "Specific next step recommendation"
+  "recommended_action": "Specific next step recommendation",
+  "caption_analysis": {
+    "has_opening_keywords": true/false,
+    "has_relocation_keywords": true/false,
+    "has_ownership_keywords": true/false,
+    "has_minor_update_keywords": true/false,
+    "summary": "Brief analysis of what the caption indicates"
+  },
+  "post_history_analysis": {
+    "total_posts": 142,
+    "page_maturity": "new" | "established" | "unknown",
+    "posting_pattern": "Brief description of posting pattern if discernible",
+    "assessment": "Is this likely a new business page or existing business?"
+  }
 }
 
 Your entire response MUST ONLY be a single, valid json object. DO NOT respond with anything other than json.`;
