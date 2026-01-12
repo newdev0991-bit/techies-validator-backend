@@ -1,4 +1,4 @@
-// server.js — OpenAI backend (ESM). package.json should include: { "type": "module" }
+// server.js - OpenAI backend (ESM). package.json should include: { "type": "module" }
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
@@ -146,7 +146,6 @@ LEAD DATA:
 - Proof URL: ${lead['Lead Proof URL'] || 'Not provided'}
 - County: ${lead['County'] || 'Not provided'}
 - Old Address: ${lead['Old Address? (For relocation, new branch, and moving premises only with no given address)'] || 'Not provided'}
-- Posted At: ${lead?.fetchResults?.rawData?.posted_at_iso || 'Not provided'}
 - Post Caption/Text: ${postCaption}
 - Previous Posts (Total: ${postsCount}):
   ${formattedPosts}
@@ -157,34 +156,35 @@ You're evaluating leads for a UK-based B2B service company. Good leads are:
 - Business relocations or expansions to new locations
 - New ownership/management changes
 - Businesses that genuinely need B2B services (restaurants, retail shops, offices, salons, etc.)
-- Must have phone numbers for contact
+- Phone numbers are strongly preferred for contact; missing numbers reduce opportunity quality
 - Must be in serviceable UK locations
 
 SEMANTIC INDICATORS TO LOOK FOR IN POST CAPTION:
-✓ New business: "grand opening", "now open", "officially open", "opening soon", "soft opening"
-✓ Relocation: "new location", "we've moved", "relocated to", "moving to", "new address", "new premises"
-✓ New ownership: "under new management", "new owner", "taken over", "new ownership"
-✓ Business context: Must mention the business itself is new/moving, not just a product/service
+- New business: "grand opening", "now open", "officially open", "opening soon", "soft opening"
+- Relocation: "new location", "we've moved", "relocated to", "moving to", "new address", "new premises"
+- New ownership: "under new management", "new owner", "taken over", "new ownership"
+- Business context: Must mention the business itself is new/moving, not just a product/service
 
 POSTING HISTORY ANALYSIS:
-✓ New business page: Few total posts (< 20), irregular posting, recently created
-✓ Established business: Many posts (> 50), regular posting history, consistent engagement
+- New business page: Few total posts (< 20), irregular posting, recently created
+- Established business: Many posts (> 50), regular posting history, consistent engagement
+- Unknown: Missing/empty history; avoid strong conclusions and mark as unknown in post history analysis
 
 Bad leads are:
 - Education sector (schools, academies, nurseries, tutoring centers, training centers)
 - Businesses that have been open for months/years already
-- Non-commercial entities (churches, charities, personal blogs, family businesses)
+- Non-commercial entities (churches, charities, personal blogs, non-commercial personal pages)
 - Locations outside UK mainland or in banned areas (Ireland, Northern Ireland, Guernsey, Jersey, Isle of Man)
 - Businesses clearly not needing B2B services
 - Missing essential contact information
 
 MINOR UPDATES TO REJECT (Not new businesses):
-✗ New products/services: "new menu", "new items", "new pricelist", "new services", "new offers"
-✗ Cosmetic changes: "new decor", "new look", "renovated", "refurbished", "new paint"
-✗ Partial expansions: "upstairs only", "new section", "new floor", "expansion area"
-✗ Equipment/furniture: "new equipment", "new furniture", "new stand", "new display"
-✗ Referrals to other businesses: "check out [other business]", "shoutout to", "visit our friends"
-✗ Staff changes only: "new staff", "new team member" (unless combined with "new ownership")
+- New products/services: "new menu", "new items", "new pricelist", "new services", "new offers"
+- Cosmetic changes: "new decor", "new look", "renovated", "refurbished", "new paint"
+- Partial expansions: "upstairs only", "new section", "new floor", "expansion area"
+- Equipment/furniture: "new equipment", "new furniture", "new stand", "new display"
+- Referrals to other businesses: "check out [other business]", "shoutout to", "visit our friends"
+- Staff changes only: "new staff", "new team member" (unless combined with "new ownership")
 
 CRITICAL FACTORS TO CONSIDER:
 1. Caption Analysis (50% weight):
@@ -214,29 +214,29 @@ EXAMPLE SCENARIOS:
 
 GOOD LEADS:
 - "Grand opening this Saturday! Come visit our new restaurant at 123 Main St"
-  → Caption: Opening keywords ✓, Post history: 5 posts (new page) ✓ → GOOD
+  + Caption: Opening keywords, Post history: 5 posts (new page) + GOOD
 
 - "We've relocated! Find us at our new premises on Oak Road"
-  → Caption: Relocation keywords ✓, Post history: 80 posts (established) ✓ → GOOD
+  + Caption: Relocation keywords, Post history: 80 posts (established) + GOOD
 
 - "Under new management! The cafe has been taken over and we're excited to serve you"
-  → Caption: New ownership keywords ✓ → GOOD
+  + Caption: New ownership keywords + GOOD
 
 BAD LEADS:
 - "Check out our new menu! Fresh items added this week"
-  → Caption: Product update ✗, Post history: 200 posts ✗ → BAD
+  + Caption: Product update, Post history: 200 posts + BAD
 
 - "New pricelist for 2024! Updated rates below"
-  → Caption: Pricelist update ✗ → BAD
+  + Caption: Pricelist update + BAD
 
 - "Our new store stand looks amazing! Come see the display"
-  → Caption: Equipment update ✗ (stand only, not business) → BAD
+  + Caption: Equipment update (stand only, not business) + BAD
 
 - "Upstairs section now open! More seating available"
-  → Caption: Partial expansion ✗ (not full opening) → BAD
+  + Caption: Partial expansion (not full opening) + BAD
 
 - "Shoutout to [Business Name] for their grand opening!"
-  → Caption: Referring to other business ✗ → BAD
+  + Caption: Referring to other business + BAD
 
 Analyze this lead carefully and provide your assessment in json format:
 
@@ -279,8 +279,9 @@ async function analyzeHandler(req, res) {
 
     const systemMsg =
       'You are a strict formatter. Output must be a single valid json object only (note the lowercase word "json"). ' +
-      'Include every key from the schema with non-empty strings; if information is unknown, write "Insufficient information". ' +
-      'Do not add extra keys, code fences, or commentary.';
+      'Include every key from the schema with appropriate types. For unknown string fields, write "Insufficient information". ' +
+      'For unknown numeric fields, use 0. For unknown boolean fields, use false. For unknown enum fields, use "unknown" ' +
+      '(except verdict, which should be "UNCLEAR" if unknown). Do not add extra keys, code fences, or commentary.';
 
     const r = await fetch(base, {
       method: 'POST',
@@ -313,7 +314,11 @@ async function analyzeHandler(req, res) {
     const aiResponse = JSON.parse(text);
 
     // Calculate freshness using JavaScript (reliable, not AI)
-    const posted_at_iso = lead?.fetchResults?.rawData?.posted_at_iso;
+    const posted_at_iso =
+      lead?.fetchResults?.rawData?.posted_at_iso ||
+      lead?.fetchResults?.rawData?.posted_at_raw ||
+      lead?.fetchResults?.rawData?.postDate ||
+      lead?.fetchResults?.postDate;
     const freshnessData = calculateLeadFreshness(posted_at_iso);
 
     // Merge AI analysis with calculated freshness
@@ -440,3 +445,6 @@ app.post('/fetch-results', fetchResultsHandler);
 app.listen(PORT, () => {
   console.log(`OpenAI backend listening on ${PORT}. Allowlist:`, allowlist);
 });
+
+
+
