@@ -1,4 +1,4 @@
-export const AINSLEY_PROFILE = 'ainsley-business-activity';
+export const CARD_DATA_PROFILE = 'card-data-business-activity';
 export const DEFAULT_ACTIVITY_WINDOW_DAYS = 183;
 
 const CLOSED_RE =
@@ -266,7 +266,7 @@ export function normalizeActorEvidence(
   const scrape = inferScrapeState(actorData);
 
   return {
-    schemaVersion: actorData.schemaVersion || 'ainsley-v1',
+    schemaVersion: actorData.schemaVersion || 'card-data-v1',
     source: actorData.source || 'facebook',
     inputUrl: actorData.inputUrl || lead.link,
     canonicalUrl,
@@ -320,7 +320,7 @@ export function normalizeActorEvidence(
   };
 }
 
-export function determineAinsleyVerdict(
+export function determineCardDataVerdict(
   evidence,
   { knownDuplicateKeys = [] } = {}
 ) {
@@ -375,7 +375,7 @@ function contactSummary(contact) {
   return `${found.join(' and ')} found.`;
 }
 
-export function buildAinsleyComment(validation, evidence) {
+export function buildCardDataComment(validation, evidence) {
   const days = evidence.activity.daysSinceLatestActivity;
   const activityText =
     days === null
@@ -399,7 +399,7 @@ export function buildAinsleyComment(validation, evidence) {
   return messages[validation.reasonCode] || 'Manual review is required.';
 }
 
-export function buildAinsleyResponse(
+export function buildCardDataResponse(
   inputLead,
   actorData,
   {
@@ -413,8 +413,8 @@ export function buildAinsleyResponse(
     activityWindowDays,
     now
   });
-  const validation = determineAinsleyVerdict(evidence, { knownDuplicateKeys });
-  const comment = buildAinsleyComment(validation, evidence);
+  const validation = determineCardDataVerdict(evidence, { knownDuplicateKeys });
+  const comment = buildCardDataComment(validation, evidence);
   const enrichedLead = {
     ...lead,
     phone: evidence.contact.phone || lead.phone,
@@ -426,7 +426,7 @@ export function buildAinsleyResponse(
 
   return {
     success: true,
-    profile: AINSLEY_PROFILE,
+    profile: CARD_DATA_PROFILE,
     lead: enrichedLead,
     validation: { ...validation, comment },
     evidence: {

@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  buildAinsleyResponse,
+  buildCardDataResponse,
   canonicalizeFacebookUrl,
   normalizeLead
-} from '../src/ainsley.js';
+} from '../src/card-data.js';
 
 const NOW = new Date('2026-07-28T00:00:00.000Z');
 const lead = {
@@ -18,7 +18,7 @@ const lead = {
 
 function actorData(overrides = {}) {
   return {
-    schemaVersion: 'ainsley-v1',
+    schemaVersion: 'card-data-v1',
     status: 'success',
     pageName: 'Example Roofing',
     canonicalUrl: 'https://www.facebook.com/example-roofing',
@@ -40,7 +40,7 @@ function actorData(overrides = {}) {
   };
 }
 
-test('normalizes both Ainsley and legacy COT columns', () => {
+test('normalizes both Card-data and legacy COT columns', () => {
   assert.deepEqual(normalizeLead(lead), {
     name: 'Example Roofing Ltd',
     category: 'Roofing',
@@ -71,7 +71,7 @@ test('canonicalizes Facebook comment URLs to the post URL', () => {
 });
 
 test('passes an active independent business inside the six-month window', () => {
-  const response = buildAinsleyResponse(lead, actorData(), { now: NOW });
+  const response = buildCardDataResponse(lead, actorData(), { now: NOW });
   assert.equal(response.validation.verdict, 'PASS');
   assert.equal(response.validation.reasonCode, 'ACTIVE_TRADING_BUSINESS');
   assert.equal(response.lead.passFail, 'PASS');
@@ -79,7 +79,7 @@ test('passes an active independent business inside the six-month window', () => 
 });
 
 test('fails activity older than six months', () => {
-  const response = buildAinsleyResponse(
+  const response = buildCardDataResponse(
     lead,
     actorData({
       activity: {
@@ -95,7 +95,7 @@ test('fails activity older than six months', () => {
 });
 
 test('fails an explicit franchise even with recent activity', () => {
-  const response = buildAinsleyResponse(
+  const response = buildCardDataResponse(
     lead,
     actorData({
       business: {
@@ -113,7 +113,7 @@ test('fails an explicit franchise even with recent activity', () => {
 });
 
 test('sends blocked pages to manual review', () => {
-  const response = buildAinsleyResponse(
+  const response = buildCardDataResponse(
     lead,
     actorData({
       status: 'error',
@@ -126,8 +126,8 @@ test('sends blocked pages to manual review', () => {
 });
 
 test('fails a known duplicate identifier', () => {
-  const first = buildAinsleyResponse(lead, actorData(), { now: NOW });
-  const duplicate = buildAinsleyResponse(lead, actorData(), {
+  const first = buildCardDataResponse(lead, actorData(), { now: NOW });
+  const duplicate = buildCardDataResponse(lead, actorData(), {
     now: NOW,
     knownDuplicateKeys: [first.evidence.duplicateKey]
   });
@@ -136,7 +136,7 @@ test('fails a known duplicate identifier', () => {
 });
 
 test('uses the newest valid page activity and ignores invalid legacy dates', () => {
-  const response = buildAinsleyResponse(
+  const response = buildCardDataResponse(
     lead,
     {
       status: 'success',

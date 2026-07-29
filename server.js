@@ -5,11 +5,11 @@ import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import { ApifyClient } from 'apify-client';
 import {
-  AINSLEY_PROFILE,
+  CARD_DATA_PROFILE,
   DEFAULT_ACTIVITY_WINDOW_DAYS,
-  buildAinsleyResponse,
+  buildCardDataResponse,
   normalizeLead
-} from './src/ainsley.js';
+} from './src/card-data.js';
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -413,7 +413,7 @@ async function runFacebookActor(lead, options = {}) {
   const { items } = await client.dataset(run.defaultDatasetId).listItems({ limit: 10 });
   if (!items?.length) {
     return {
-      schemaVersion: 'ainsley-v1',
+      schemaVersion: 'card-data-v1',
       status: 'error',
       error: 'Actor returned no dataset item.',
       inputUrl: normalizedLead.link,
@@ -434,11 +434,11 @@ async function runFacebookActor(lead, options = {}) {
 
 async function validateBusinessHandler(req, res) {
   try {
-    const { lead, profile = AINSLEY_PROFILE, knownDuplicateKeys = [] } = req.body || {};
+    const { lead, profile = CARD_DATA_PROFILE, knownDuplicateKeys = [] } = req.body || {};
     if (!lead) return res.status(400).json({ error: 'lead object is required.' });
-    if (profile !== AINSLEY_PROFILE) {
+    if (profile !== CARD_DATA_PROFILE) {
       return res.status(400).json({
-        error: `Unsupported profile. Use "${AINSLEY_PROFILE}".`
+        error: `Unsupported profile. Use "${CARD_DATA_PROFILE}".`
       });
     }
     if (!Array.isArray(knownDuplicateKeys)) {
@@ -449,7 +449,7 @@ async function validateBusinessHandler(req, res) {
       process.env.ACTIVITY_WINDOW_DAYS || DEFAULT_ACTIVITY_WINDOW_DAYS
     );
     const actorData = await runFacebookActor(lead, { activityWindowDays });
-    const response = buildAinsleyResponse(lead, actorData, {
+    const response = buildCardDataResponse(lead, actorData, {
       activityWindowDays,
       knownDuplicateKeys
     });

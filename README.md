@@ -1,16 +1,16 @@
 # Techies Validator Backend
 
 Express backend for the Techies validator. The default workflow implements
-Ainsley's business-activity rules and uses the private Apify Facebook actor for
+Card-data's business-activity rules and uses the private Apify Facebook actor for
 source evidence.
 
-## Ainsley validation contract
+## Card-data validation contract
 
 `POST /validate-business` accepts one lead at a time:
 
 ```json
 {
-  "profile": "ainsley-business-activity",
+  "profile": "card-data-business-activity",
   "lead": {
     "Name": "Example Roofing",
     "Category": "Roofing Service",
@@ -56,7 +56,7 @@ On Render, use `npm start`. Refresh `FACEBOOK_COOKIES` when the actor reports
 ## Endpoints
 
 - `GET /health`
-- `POST /validate-business` — Ainsley workflow
+- `POST /validate-business` — Card-data workflow
 - `POST /fetch-results` — structured Apify evidence lookup
 - `POST /analyze` — preserved legacy COT/OpenAI workflow
 
