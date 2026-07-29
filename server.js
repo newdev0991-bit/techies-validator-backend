@@ -4,6 +4,12 @@ import express from 'express';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import { ApifyClient } from 'apify-client';
+import {
+  AINSLEY_PROFILE,
+  DEFAULT_ACTIVITY_WINDOW_DAYS,
+  buildAinsleyResponse,
+  normalizeLead
+} from './src/ainsley.js';
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -128,7 +134,12 @@ function buildPrompt(lead) {
   const previousPosts = lead?.fetchResults?.rawData?.previousPosts || lead?.fetchResults?.previousPosts || [];
   const postsCount = Array.isArray(previousPosts) ? previousPosts.length : 0;
   const formattedPosts = Array.isArray(previousPosts) && previousPosts.length > 0
-    ? previousPosts.slice(0, 10).map((post, idx) => `${idx + 1}. ${post}`).join('\n  ')
+    ? previousPosts.slice(0, 10).map((post, idx) => {
+        if (typeof post === 'string') return `${idx + 1}. ${post}`;
+        const date = post?.posted_at_iso || post?.posted_at_raw || post?.postDate || 'Unknown date';
+        const text = post?.postText || 'No caption';
+        return `${idx + 1}. [${date}] ${text}`;
+      }).join('\n  ')
     : 'No previous posts available';
 
   // Extract post caption/text
@@ -322,6 +333,7 @@ async function analyzeHandler(req, res) {
     const freshnessData = calculateLeadFreshness(posted_at_iso);
 
     // Merge AI analysis with calculated freshness
+    const scrapedResult = lead?.fetchResults?.rawData || lead?.fetchResults || null;
     const enrichedResponse = {
       ...aiResponse,
       freshness: freshnessData,
@@ -334,7 +346,17 @@ async function analyzeHandler(req, res) {
       // Add red flag if stale
       red_flags: freshnessData.isFresh === false
         ? [...(aiResponse.red_flags || []), `Lead is ${freshnessData.daysOld} days old - exceeds freshness threshold`]
-        : aiResponse.red_flags
+        : aiResponse.red_flags,
+      scraped_post_data: scrapedResult
+        ? {
+            text: scrapedResult.postText || null,
+            author: scrapedResult.pageName || null,
+            url: scrapedResult.postUrl || lead['Lead Proof URL'] || null
+          }
+        : null,
+      apify_scraping_success: Boolean(scrapedResult && scrapedResult.status === 'success'),
+      posted_at: freshnessData.timestamp,
+      needs_manual_review: freshnessData.isFresh === null
     };
 
     // Keep the frontend contract identical to your Claude version
@@ -348,6 +370,106 @@ async function analyzeHandler(req, res) {
 app.post('/validate', analyzeHandler);
 app.post('/analyze', analyzeHandler);
 
+function parseFacebookCookies() {
+  const raw = process.env.FACEBOOK_COOKIES;
+  if (!raw) throw new Error('Missing FACEBOOK_COOKIES on server.');
+  const cookies = JSON.parse(raw);
+  if (!Array.isArray(cookies)) throw new Error('FACEBOOK_COOKIES must be a JSON array.');
+  return cookies;
+}
+
+async function runFacebookActor(lead, options = {}) {
+  const APIFY_API_TOKEN = process.env.APIFY_API_TOKEN;
+  if (!APIFY_API_TOKEN) throw new Error('Missing APIFY_API_TOKEN on server.');
+
+  const normalizedLead = normalizeLead(lead);
+  if (!normalizedLead.link) throw new Error('A Facebook/business Link is required.');
+
+  const cookies = parseFacebookCookies();
+  const client = new ApifyClient({ token: APIFY_API_TOKEN });
+  const actorId = process.env.APIFY_ACTOR_ID || 'cE441Keduu5udSFbY';
+  const actorClient = client.actor(actorId);
+  const activityWindowDays = Number(
+    options.activityWindowDays ||
+      process.env.ACTIVITY_WINDOW_DAYS ||
+      DEFAULT_ACTIVITY_WINDOW_DAYS
+  );
+  const maxPosts = Math.max(
+    1,
+    Math.min(20, Number(options.maxPosts || process.env.APIFY_MAX_POSTS || 10))
+  );
+
+  console.log(`[facebook-actor] Starting ${actorId} for ${normalizedLead.link}`);
+  const run = await actorClient.call({
+    cookies: JSON.stringify(cookies),
+    startUrls: [{ url: normalizedLead.link }],
+    lead: normalizedLead,
+    activityWindowDays,
+    maxPosts,
+    includeContactDetails: true,
+    includePageDetails: true,
+    includePreviousPosts: true
+  });
+  const { items } = await client.dataset(run.defaultDatasetId).listItems({ limit: 10 });
+  if (!items?.length) {
+    return {
+      schemaVersion: 'ainsley-v1',
+      status: 'error',
+      error: 'Actor returned no dataset item.',
+      inputUrl: normalizedLead.link,
+      scrape: {
+        success: false,
+        partial: false,
+        blocked: false,
+        warnings: ['Actor returned no dataset item.']
+      }
+    };
+  }
+
+  if (items.length > 1) {
+    console.warn(`[facebook-actor] Actor returned ${items.length} items; using consolidated first item.`);
+  }
+  return items[0];
+}
+
+async function validateBusinessHandler(req, res) {
+  try {
+    const { lead, profile = AINSLEY_PROFILE, knownDuplicateKeys = [] } = req.body || {};
+    if (!lead) return res.status(400).json({ error: 'lead object is required.' });
+    if (profile !== AINSLEY_PROFILE) {
+      return res.status(400).json({
+        error: `Unsupported profile. Use "${AINSLEY_PROFILE}".`
+      });
+    }
+    if (!Array.isArray(knownDuplicateKeys)) {
+      return res.status(400).json({ error: 'knownDuplicateKeys must be an array.' });
+    }
+
+    const activityWindowDays = Number(
+      process.env.ACTIVITY_WINDOW_DAYS || DEFAULT_ACTIVITY_WINDOW_DAYS
+    );
+    const actorData = await runFacebookActor(lead, { activityWindowDays });
+    const response = buildAinsleyResponse(lead, actorData, {
+      activityWindowDays,
+      knownDuplicateKeys
+    });
+
+    // Temporary compatibility for clients that still parse content[0].text.
+    return res.json({
+      ...response,
+      content: [{ text: JSON.stringify(response) }]
+    });
+  } catch (error) {
+    console.error('[validate-business] Error:', error.message);
+    return res.status(500).json({
+      error: 'Failed to validate business.',
+      details: error.message
+    });
+  }
+}
+
+app.post('/validate-business', validateBusinessHandler);
+
 async function fetchResultsHandler(req, res) {
   try {
     const { lead } = req.body || {};
@@ -357,65 +479,14 @@ async function fetchResultsHandler(req, res) {
       return res.status(400).json({ error: 'lead object is required.' });
     }
 
-    const leadProofUrl = lead['Lead Proof URL'];
+    const normalizedLead = normalizeLead(lead);
+    const leadProofUrl = normalizedLead.link;
     if (!leadProofUrl) {
       return res.status(400).json({ error: 'Lead Proof URL is missing from lead object.' });
     }
 
-    // Check for Apify token
-    const APIFY_API_TOKEN = process.env.APIFY_API_TOKEN;
-    if (!APIFY_API_TOKEN) {
-      return res.status(500).json({ error: 'Missing APIFY_API_TOKEN on server.' });
-    }
-
-    // Check for Facebook cookies
-    const FACEBOOK_COOKIES = process.env.FACEBOOK_COOKIES;
-    if (!FACEBOOK_COOKIES) {
-      return res.status(500).json({ error: 'Missing FACEBOOK_COOKIES on server.' });
-    }
-
-    // Parse cookies from environment variable (expected as JSON array)
-    let cookiesArray;
-    try {
-      cookiesArray = JSON.parse(FACEBOOK_COOKIES);
-      if (!Array.isArray(cookiesArray)) {
-        throw new Error('FACEBOOK_COOKIES must be a JSON array');
-      }
-    } catch (parseError) {
-      console.error('[fetch-results] Failed to parse FACEBOOK_COOKIES:', parseError.message);
-      return res.status(500).json({
-        error: 'Invalid FACEBOOK_COOKIES format. Must be a valid JSON array.',
-        details: parseError.message
-      });
-    }
-
-    // Initialize Apify client
-    const client = new ApifyClient({ token: APIFY_API_TOKEN });
-    const actorClient = client.actor('cE441Keduu5udSFbY');
-
-    console.log(`[fetch-results] Starting Apify actor for URL: ${leadProofUrl}`);
-
-    // Run actor with Facebook cookies and URL
-    const run = await actorClient.call({
-      cookies: JSON.stringify(cookiesArray),
-      startUrls: [{ url: leadProofUrl }]
-    });
-
-    console.log(`[fetch-results] Actor run completed. Run ID: ${run.id}`);
-
-    // Extract results from dataset
-    const { items } = await client.dataset(run.defaultDatasetId).listItems();
-
-    if (!items || items.length === 0) {
-      console.error('[fetch-results] No items returned from Apify actor');
-      return res.status(404).json({
-        error: 'No data found for the provided URL.',
-        leadProofUrl
-      });
-    }
-
-    const result = items[0];
-    console.log('[fetch-results] Extracted result:', JSON.stringify(result, null, 2));
+    const result = await runFacebookActor(lead);
+    console.log(`[fetch-results] Actor completed for ${leadProofUrl}: ${result.status || 'unknown'}`);
 
     // Extract post date from various possible fields
     const postDate = result.postDate || result.posted_at_raw || result.posted_at_iso || null;
@@ -427,6 +498,8 @@ async function fetchResultsHandler(req, res) {
       postText: result.postText || null,
       status: result.status || 'success',
       previousPosts: result.previousPosts || [],
+      schemaVersion: result.schemaVersion || 'legacy',
+      actorData: result,
       rawData: result
     });
 
