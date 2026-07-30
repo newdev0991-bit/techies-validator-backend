@@ -16,12 +16,19 @@ const PORT = process.env.PORT || 4000;
 
 /* ---------- CORS allowlist (Vercel + localhost) ---------- */
 const rawAllow = process.env.FRONTEND_ORIGIN || process.env.ALLOWED_ORIGINS || '';
-const allowlist = ['http://localhost:3000', ...rawAllow.split(',').map(s => s.trim()).filter(Boolean)];
+const allowlist = [
+  'http://localhost:3000',
+  'http://127.0.0.1:3000',
+  ...rawAllow.split(',').map(s => s.trim()).filter(Boolean)
+];
+const projectVercelOrigin =
+  /^https:\/\/(?:techies-validator-frontend-2026(?:-[a-z0-9]+)?|techies-validator-fro-git-[a-z0-9]+-jehu-zachary-sedillos-projects)\.vercel\.app$/i;
 
 const corsOptions = {
   origin(origin, cb) {
     if (!origin) return cb(null, true);            // curl/Postman/no-origin
-    return allowlist.includes(origin) ? cb(null, true) : cb(new Error('Not allowed by CORS'), false);
+    const allowed = allowlist.includes(origin) || projectVercelOrigin.test(origin);
+    return allowed ? cb(null, true) : cb(new Error('Not allowed by CORS'), false);
   },
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
