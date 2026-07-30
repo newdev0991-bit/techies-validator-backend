@@ -268,25 +268,6 @@ export function normalizeActorEvidence(
     chainSignals.push('Explicit national or multi-location wording');
   }
 
-  const contact = actorData.contact || {};
-  const submittedEmail = normalizeEmail(lead.email);
-  const actorEmail = normalizeEmail(contact.email || actorData.email);
-  const actorEmailSource = String(
-    contact.emailSource || actorData.emailSource || ''
-  ).trim();
-  const actorEmailVerified = Boolean(
-    contact.emailVerified === true ||
-      actorData.emailVerified === true ||
-      ['mailto-link', 'labeled-page-contact'].includes(actorEmailSource)
-  );
-  const acceptedEmail = submittedEmail || (actorEmailVerified ? actorEmail : '');
-  const emailSource = submittedEmail
-    ? 'submitted-lead'
-    : acceptedEmail
-      ? actorEmailSource || 'verified-page-contact'
-      : actorEmail
-        ? 'rejected-unverified'
-        : null;
   const address = actorData.address || {};
   const canonicalUrl = canonicalizeFacebookUrl(
     actorData.canonicalUrl || actorData.pageUrl || lead.link
@@ -305,6 +286,39 @@ export function normalizeActorEvidence(
       : pageName
         ? 'unconfirmed'
         : 'missing';
+  const identityMatched = identityStatus === 'matched';
+  const contact = actorData.contact || {};
+  const submittedEmail = normalizeEmail(lead.email);
+  const actorEmail = normalizeEmail(contact.email || actorData.email);
+  const actorEmailSource = String(
+    contact.emailSource || actorData.emailSource || ''
+  ).trim();
+  const actorEmailVerified = Boolean(
+    contact.emailVerified === true ||
+      actorData.emailVerified === true ||
+      ['mailto-link', 'labeled-page-contact'].includes(actorEmailSource)
+  );
+  const acceptedActorEmail = identityMatched && actorEmailVerified ? actorEmail : '';
+  const acceptedEmail = submittedEmail || acceptedActorEmail;
+  const emailSource = submittedEmail
+    ? 'submitted-lead'
+    : acceptedActorEmail
+      ? actorEmailSource || 'verified-page-contact'
+      : actorEmail
+        ? identityMatched
+          ? 'rejected-unverified'
+          : 'rejected-unconfirmed-identity'
+        : null;
+  const submittedPhone = String(lead.phone || '').trim();
+  const actorPhone = String(contact.phone || actorData.phone || '').trim();
+  const acceptedPhone = submittedPhone || (identityMatched ? actorPhone : '');
+  const submittedOwnerName = String(lead.ownerName || '').trim();
+  const actorOwnerName = String(contact.ownerName || actorData.ownerName || '').trim();
+  const acceptedOwnerName =
+    submittedOwnerName || (identityMatched ? actorOwnerName : '');
+  const acceptedWebsite = identityMatched
+    ? String(contact.website || actorData.website || '').trim()
+    : '';
   const wrongBusiness = explicitHighConfidenceMismatch;
   const scrape = inferScrapeState(actorData);
 
@@ -323,12 +337,12 @@ export function normalizeActorEvidence(
       postcode: address.postcode || lead.zip || null
     },
     contact: {
-      phone: contact.phone || actorData.phone || lead.phone || null,
+      phone: acceptedPhone || null,
       email: acceptedEmail || null,
       emailVerified: Boolean(acceptedEmail),
       emailSource,
-      website: contact.website || actorData.website || null,
-      ownerName: contact.ownerName || actorData.ownerName || lead.ownerName || null
+      website: acceptedWebsite || null,
+      ownerName: acceptedOwnerName || null
     },
     activity: {
       latestPostDate: latestPost?.date || null,

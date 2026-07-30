@@ -164,7 +164,7 @@ test('rejects unverified account-level email and sends an uncertain page identit
   assert.equal(response.lead.email, '');
   assert.equal(response.evidence.contact.email, null);
   assert.equal(response.evidence.contact.emailVerified, false);
-  assert.equal(response.evidence.contact.emailSource, 'rejected-unverified');
+  assert.equal(response.evidence.contact.emailSource, 'rejected-unconfirmed-identity');
 });
 
 test('accepts an email only when the page contact extractor verifies its provenance', () => {
@@ -185,6 +185,49 @@ test('accepts an email only when the page contact extractor verifies its provena
   assert.equal(response.lead.email, 'hello@example.co.uk');
   assert.equal(response.evidence.contact.emailVerified, true);
   assert.equal(response.evidence.contact.emailSource, 'mailto-link');
+});
+
+test('rejects a labeled account email until the Facebook page identity is matched', () => {
+  const response = buildCardDataResponse(
+    {
+      ...lead,
+      Name: 'City Roofing & Landscaping',
+      Link: 'https://www.facebook.com/109181487628958'
+    },
+    actorData({
+      pageName: 'Hernández Kaito',
+      canonicalUrl: 'https://www.facebook.com/109181487628958',
+      contact: {
+        phone: '07700 900123',
+        email: 'jehusedillo1@yahoo.com',
+        emailVerified: true,
+        emailSource: 'labeled-page-contact',
+        website: 'https://unrelated.example.test'
+      },
+      business: {
+        tradingStatus: 'active',
+        isChain: false,
+        isFranchise: false,
+        isLargeBusiness: false,
+        identityStatus: 'unconfirmed',
+        identityConfidence: 'low'
+      }
+    }),
+    { now: NOW }
+  );
+
+  assert.equal(response.validation.verdict, 'MANUAL_REVIEW');
+  assert.equal(response.validation.reasonCode, 'BUSINESS_IDENTITY_UNCONFIRMED');
+  assert.equal(response.lead.email, '');
+  assert.equal(response.lead.phone, '');
+  assert.equal(response.evidence.contact.email, null);
+  assert.equal(response.evidence.contact.emailVerified, false);
+  assert.equal(response.evidence.contact.emailSource, 'rejected-unconfirmed-identity');
+  assert.equal(response.evidence.contact.phone, null);
+  assert.equal(response.evidence.contact.website, null);
+  assert.ok(
+    !response.analysis.successFactors.some((factor) => /email|contact detail/i.test(factor))
+  );
 });
 
 test('fails a known duplicate identifier', () => {
