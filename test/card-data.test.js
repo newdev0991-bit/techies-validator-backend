@@ -71,11 +71,19 @@ test('canonicalizes Facebook comment URLs to the post URL', () => {
 });
 
 test('passes an active independent business inside the six-month window', () => {
-  const response = buildCardDataResponse(lead, actorData(), { now: NOW });
+  const response = buildCardDataResponse(lead, actorData(), {
+    now: NOW,
+    processingTimeMs: 1250
+  });
   assert.equal(response.validation.verdict, 'PASS');
   assert.equal(response.validation.reasonCode, 'ACTIVE_TRADING_BUSINESS');
   assert.equal(response.lead.passFail, 'PASS');
   assert.equal(response.lead.phone, '0151 123 4567');
+  assert.match(response.analysis.summary, /active, independent business/i);
+  assert.equal(response.analysis.processingTimeMs, 1250);
+  assert.ok(response.analysis.confidence >= 0 && response.analysis.confidence <= 100);
+  assert.ok(response.analysis.opportunityScore >= 0 && response.analysis.opportunityScore <= 100);
+  assert.ok(response.analysis.successFactors.some((factor) => /recent facebook activity/i.test(factor)));
 });
 
 test('fails activity older than six months', () => {
@@ -92,6 +100,8 @@ test('fails activity older than six months', () => {
   );
   assert.equal(response.validation.verdict, 'FAIL');
   assert.equal(response.validation.reasonCode, 'NO_ACTIVITY_WITHIN_SIX_MONTHS');
+  assert.ok(response.analysis.riskFactors.some((factor) => /acceptance window/i.test(factor)));
+  assert.match(response.analysis.recommendedAction, /do not progress/i);
 });
 
 test('fails an explicit franchise even with recent activity', () => {
@@ -123,6 +133,8 @@ test('sends blocked pages to manual review', () => {
   );
   assert.equal(response.validation.verdict, 'MANUAL_REVIEW');
   assert.equal(response.validation.reasonCode, 'SCRAPE_BLOCKED');
+  assert.ok(response.analysis.riskFactors.some((factor) => /blocked/i.test(factor)));
+  assert.match(response.analysis.recommendedAction, /manually/i);
 });
 
 test('fails a known duplicate identifier', () => {

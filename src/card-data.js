@@ -399,13 +399,202 @@ export function buildCardDataComment(validation, evidence) {
   return messages[validation.reasonCode] || 'Manual review is required.';
 }
 
+function boundedScore(value) {
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function formatActivityAge(days) {
+  if (!Number.isFinite(days)) return 'No reliable dated Facebook activity was found.';
+  if (days === 0) return 'The latest Facebook activity was posted today.';
+  return `The latest Facebook activity was posted ${days} day${days === 1 ? '' : 's'} ago.`;
+}
+
+export function buildCardDataAnalysis(
+  validation,
+  evidence,
+  { processingTimeMs = 0 } = {}
+) {
+  const successFactors = [];
+  const riskFactors = [];
+  const days = evidence.activity.daysSinceLatestActivity;
+  const contactTypes = [
+    evidence.contact.phone ? 'phone' : '',
+    evidence.contact.email ? 'email' : '',
+    evidence.contact.website ? 'website' : ''
+  ].filter(Boolean);
+
+  if (evidence.activity.postedWithinWindow) {
+    successFactors.push(
+      Number.isFinite(days)
+        ? `Recent Facebook activity found ${days} day${days === 1 ? '' : 's'} ago`
+        : `Dated activity found within the ${evidence.activity.activityWindowDays}-day window`
+    );
+  }
+  if (evidence.business.tradingStatus === 'active') {
+    successFactors.push('Facebook evidence indicates the business is actively trading');
+  }
+  if (
+    !evidence.business.isChain &&
+    !evidence.business.isFranchise &&
+    !evidence.business.isLargeBusiness
+  ) {
+    successFactors.push('No chain, franchise, or large-business signals were detected');
+  }
+  if (contactTypes.length) {
+    successFactors.push(`Public ${contactTypes.join(', ')} contact details were found`);
+  }
+  if (
+    evidence.pageName &&
+    (evidence.business.nameSimilarity === null || evidence.business.nameSimilarity >= 0.5)
+  ) {
+    successFactors.push('The Facebook page identity aligns with the submitted business');
+  }
+
+  if (validation.reasonCode === 'DUPLICATE_BUSINESS') {
+    riskFactors.push('This business matches an identifier already present in the uploaded file');
+  }
+  if (evidence.scrape.notFound) {
+    riskFactors.push('The supplied Facebook business page was unavailable or not found');
+  }
+  if (evidence.business.wrongBusiness) {
+    riskFactors.push('The Facebook page identity does not match the submitted business');
+  }
+  if (
+    evidence.business.tradingStatus === 'closed' ||
+    evidence.business.tradingStatus === 'inactive'
+  ) {
+    riskFactors.push('Evidence indicates that the business is closed or no longer trading');
+  }
+  if (evidence.business.tradingStatus === 'temporarily_closed') {
+    riskFactors.push('The business is marked as temporarily closed');
+  }
+  if (
+    evidence.business.isChain ||
+    evidence.business.isFranchise ||
+    evidence.business.isLargeBusiness
+  ) {
+    riskFactors.push(
+      evidence.business.chainSignals.length
+        ? `Chain or franchise signals: ${evidence.business.chainSignals.join('; ')}`
+        : 'The business appears to be a chain, franchise, or large organisation'
+    );
+  }
+  if (evidence.scrape.blocked || evidence.scrape.loginRequired) {
+    riskFactors.push('Facebook blocked the scrape or required login, limiting verification');
+  }
+  if (!evidence.activity.latestPostDate) {
+    riskFactors.push('No reliable dated Facebook activity was available');
+  } else if (!evidence.activity.postedWithinWindow) {
+    riskFactors.push(
+      `The latest activity falls outside the ${evidence.activity.activityWindowDays}-day acceptance window`
+    );
+  }
+  if (evidence.scrape.partial) {
+    riskFactors.push('Only partial Facebook evidence was collected');
+  }
+  if (!contactTypes.length) {
+    riskFactors.push('No public phone, email, or website was found');
+  }
+  if (evidence.activity.postsChecked <= 1 && !evidence.scrape.blocked) {
+    riskFactors.push('Limited post history was available for corroboration');
+  }
+
+  const confidenceByReason = {
+    ACTIVE_TRADING_BUSINESS: 90,
+    DUPLICATE_BUSINESS: 98,
+    BUSINESS_PAGE_NOT_FOUND: 96,
+    WRONG_BUSINESS: 92,
+    NOT_TRADING: 94,
+    LARGE_CHAIN_OR_FRANCHISE: 93,
+    SCRAPE_BLOCKED: 45,
+    NO_DATED_ACTIVITY: 55,
+    NO_ACTIVITY_WITHIN_SIX_MONTHS: 92,
+    PARTIAL_EVIDENCE: 60
+  };
+  let confidence = confidenceByReason[validation.reasonCode] ?? 50;
+  if (evidence.activity.postsChecked >= 3) confidence += 3;
+  if (evidence.scrape.partial) confidence -= 8;
+  if (evidence.scrape.blocked) confidence -= 5;
+
+  let opportunityScore =
+    validation.verdict === 'PASS' ? 72 : validation.verdict === 'MANUAL_REVIEW' ? 45 : 15;
+  if (evidence.activity.postedWithinWindow) opportunityScore += 10;
+  if (Number.isFinite(days) && days <= 30) opportunityScore += 5;
+  if (contactTypes.length) opportunityScore += Math.min(8, contactTypes.length * 3);
+  if (evidence.business.tradingStatus === 'active') opportunityScore += 5;
+  if (validation.reasonCode === 'LARGE_CHAIN_OR_FRANCHISE') opportunityScore = 10;
+  if (validation.reasonCode === 'DUPLICATE_BUSINESS') opportunityScore = 5;
+  if (validation.reasonCode === 'NOT_TRADING') opportunityScore = 5;
+  if (validation.reasonCode === 'BUSINESS_PAGE_NOT_FOUND') opportunityScore = 10;
+
+  const activitySentence = formatActivityAge(days);
+  const summaries = {
+    ACTIVE_TRADING_BUSINESS:
+      `The available Facebook evidence supports this as an active, independent business. ${activitySentence} No disqualifying closure, identity, chain, franchise, or duplicate signals were detected.`,
+    DUPLICATE_BUSINESS:
+      'The business evidence may otherwise be usable, but the record matches a business already identified in this upload. The duplicate rule therefore takes priority.',
+    BUSINESS_PAGE_NOT_FOUND:
+      'The supplied Facebook page could not be found or was unavailable, so the business and its recent activity cannot be verified from the submitted source.',
+    WRONG_BUSINESS:
+      'The Facebook page appears to represent a different business from the submitted lead. Using its activity or contact details would create an identity mismatch.',
+    NOT_TRADING:
+      'The collected evidence indicates that this business is closed or no longer trading. It does not meet the active-business requirement.',
+    LARGE_CHAIN_OR_FRANCHISE:
+      'The collected evidence indicates a chain, franchise, or large organisation. This falls outside the Card-data independent-business validation profile.',
+    SCRAPE_BLOCKED:
+      'Facebook blocked access or required login before enough evidence could be collected. The system cannot make a reliable automated decision from the available data.',
+    NO_DATED_ACTIVITY:
+      'No reliable dated Facebook activity was found. Without a verifiable activity date, the six-month activity requirement cannot be confirmed automatically.',
+    NO_ACTIVITY_WITHIN_SIX_MONTHS:
+      `The Facebook page has dated activity, but it is outside the ${evidence.activity.activityWindowDays}-day acceptance window. ${activitySentence}`,
+    PARTIAL_EVIDENCE:
+      `Some qualifying business evidence was collected, but the scrape was incomplete. ${activitySentence} A manual check is needed before accepting or rejecting the lead.`
+  };
+  const recommendedActions = {
+    ACTIVE_TRADING_BUSINESS:
+      'Proceed with outreach using the verified public contact details, while keeping the cited Facebook activity as validation evidence.',
+    DUPLICATE_BUSINESS:
+      'Do not create a second lead. Review the existing record and merge any newer contact or activity evidence.',
+    BUSINESS_PAGE_NOT_FOUND:
+      'Confirm the Facebook URL or locate another official business source before progressing this lead.',
+    WRONG_BUSINESS:
+      'Correct the Facebook URL and rerun validation against the intended business.',
+    NOT_TRADING:
+      'Do not progress this lead unless newer evidence proves that the business has resumed trading.',
+    LARGE_CHAIN_OR_FRANCHISE:
+      'Do not progress this lead under the independent-business profile.',
+    SCRAPE_BLOCKED:
+      'Open the Facebook page manually with an authenticated session and verify identity, trading status, and recent activity.',
+    NO_DATED_ACTIVITY:
+      'Review the page manually or obtain another dated official source before making a decision.',
+    NO_ACTIVITY_WITHIN_SIX_MONTHS:
+      'Do not progress this lead unless newer dated activity can be verified.',
+    PARTIAL_EVIDENCE:
+      'Review the cited Facebook page manually and confirm the missing evidence before making a final decision.'
+  };
+
+  return {
+    summary: summaries[validation.reasonCode] || buildCardDataComment(validation, evidence),
+    recommendedAction:
+      recommendedActions[validation.reasonCode] ||
+      'Review the available evidence manually before progressing this lead.',
+    confidence: boundedScore(confidence),
+    opportunityScore: boundedScore(opportunityScore),
+    processingTimeMs: Math.max(0, Math.round(Number(processingTimeMs) || 0)),
+    successFactors: [...new Set(successFactors)],
+    riskFactors: [...new Set(riskFactors)],
+    generatedBy: 'card-data-validation-engine'
+  };
+}
+
 export function buildCardDataResponse(
   inputLead,
   actorData,
   {
     activityWindowDays = DEFAULT_ACTIVITY_WINDOW_DAYS,
     knownDuplicateKeys = [],
-    now = new Date()
+    now = new Date(),
+    processingTimeMs = 0
   } = {}
 ) {
   const lead = normalizeLead(inputLead);
@@ -415,6 +604,7 @@ export function buildCardDataResponse(
   });
   const validation = determineCardDataVerdict(evidence, { knownDuplicateKeys });
   const comment = buildCardDataComment(validation, evidence);
+  const analysis = buildCardDataAnalysis(validation, evidence, { processingTimeMs });
   const enrichedLead = {
     ...lead,
     phone: evidence.contact.phone || lead.phone,
@@ -429,6 +619,7 @@ export function buildCardDataResponse(
     profile: CARD_DATA_PROFILE,
     lead: enrichedLead,
     validation: { ...validation, comment },
+    analysis,
     evidence: {
       canonicalUrl: evidence.canonicalUrl,
       pageId: evidence.pageId,

@@ -433,6 +433,7 @@ async function runFacebookActor(lead, options = {}) {
 }
 
 async function validateBusinessHandler(req, res) {
+  const startedAt = Date.now();
   try {
     const { lead, profile = CARD_DATA_PROFILE, knownDuplicateKeys = [] } = req.body || {};
     if (!lead) return res.status(400).json({ error: 'lead object is required.' });
@@ -451,7 +452,8 @@ async function validateBusinessHandler(req, res) {
     const actorData = await runFacebookActor(lead, { activityWindowDays });
     const response = buildCardDataResponse(lead, actorData, {
       activityWindowDays,
-      knownDuplicateKeys
+      knownDuplicateKeys,
+      processingTimeMs: Date.now() - startedAt
     });
 
     // Temporary compatibility for clients that still parse content[0].text.
