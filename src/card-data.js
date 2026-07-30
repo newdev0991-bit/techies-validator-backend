@@ -288,6 +288,22 @@ export function normalizeActorEvidence(
         : 'missing';
   const identityMatched = identityStatus === 'matched';
   const contact = actorData.contact || {};
+  const contactSource = String(contact.source || actorData.contactSource || '').trim();
+  const contactSourceUrl = String(
+    contact.sourceUrl || actorData.contactSourceUrl || ''
+  ).trim();
+  const contactIdentityStatus = String(
+    contact.identityStatus || actorData.contactIdentityStatus || ''
+  ).toLowerCase();
+  const contactIdentityConfidence = String(
+    contact.identityConfidence || actorData.contactIdentityConfidence || ''
+  ).toLowerCase();
+  const googleContactIdentityMatched = Boolean(
+    contactSource === 'google-official-website' &&
+      contactIdentityStatus === 'matched' &&
+      /^https?:\/\//i.test(contactSourceUrl)
+  );
+  const contactIdentityMatched = identityMatched || googleContactIdentityMatched;
   const submittedEmail = normalizeEmail(lead.email);
   const actorEmail = normalizeEmail(contact.email || actorData.email);
   const actorEmailSource = String(
@@ -296,9 +312,11 @@ export function normalizeActorEvidence(
   const actorEmailVerified = Boolean(
     contact.emailVerified === true ||
       actorData.emailVerified === true ||
-      ['mailto-link', 'labeled-page-contact'].includes(actorEmailSource)
+      ['mailto-link', 'labeled-page-contact'].includes(actorEmailSource) ||
+      actorEmailSource.startsWith('google-official-website')
   );
-  const acceptedActorEmail = identityMatched && actorEmailVerified ? actorEmail : '';
+  const acceptedActorEmail =
+    contactIdentityMatched && actorEmailVerified ? actorEmail : '';
   const acceptedEmail = submittedEmail || acceptedActorEmail;
   const emailSource = submittedEmail
     ? 'submitted-lead'
@@ -311,12 +329,16 @@ export function normalizeActorEvidence(
         : null;
   const submittedPhone = String(lead.phone || '').trim();
   const actorPhone = String(contact.phone || actorData.phone || '').trim();
-  const acceptedPhone = submittedPhone || (identityMatched ? actorPhone : '');
+  const actorPhoneVerified =
+    identityMatched ||
+    (googleContactIdentityMatched &&
+      (contact.phoneVerified === true || actorData.phoneVerified === true));
+  const acceptedPhone = submittedPhone || (actorPhoneVerified ? actorPhone : '');
   const submittedOwnerName = String(lead.ownerName || '').trim();
   const actorOwnerName = String(contact.ownerName || actorData.ownerName || '').trim();
   const acceptedOwnerName =
     submittedOwnerName || (identityMatched ? actorOwnerName : '');
-  const acceptedWebsite = identityMatched
+  const acceptedWebsite = contactIdentityMatched
     ? String(contact.website || actorData.website || '').trim()
     : '';
   const wrongBusiness = explicitHighConfidenceMismatch;
@@ -341,8 +363,31 @@ export function normalizeActorEvidence(
       email: acceptedEmail || null,
       emailVerified: Boolean(acceptedEmail),
       emailSource,
+      phoneVerified: Boolean(acceptedPhone),
+      phoneSource: submittedPhone
+        ? 'submitted-lead'
+        : acceptedPhone
+          ? String(contact.phoneSource || actorData.phoneSource || 'verified-page-contact')
+          : null,
       website: acceptedWebsite || null,
-      ownerName: acceptedOwnerName || null
+      ownerName: acceptedOwnerName || null,
+      source: googleContactIdentityMatched
+        ? contactSource
+        : submittedEmail || submittedPhone
+          ? 'submitted-lead'
+          : contactSource || null,
+      sourceUrl: contactSourceUrl || null,
+      identityStatus: googleContactIdentityMatched
+        ? 'matched'
+        : identityMatched
+          ? 'matched'
+          : contactIdentityStatus || 'unconfirmed',
+      identityConfidence: googleContactIdentityMatched
+        ? contactIdentityConfidence || 'high'
+        : identityMatched
+          ? 'medium'
+          : contactIdentityConfidence || 'low',
+      searchQuery: contact.searchQuery || actorData.googleSearchQuery || null
     },
     activity: {
       latestPostDate: latestPost?.date || null,
@@ -515,7 +560,11 @@ export function buildCardDataAnalysis(
     successFactors.push('No chain, franchise, or large-business signals were detected');
   }
   if (contactTypes.length) {
-    successFactors.push(`Public ${contactTypes.join(', ')} contact details were found`);
+    successFactors.push(
+      evidence.contact.source === 'google-official-website'
+        ? `Google verified public ${contactTypes.join(', ')} contact details on the matched official website`
+        : `Public ${contactTypes.join(', ')} contact details were found`
+    );
   }
   if (evidence.business.identityStatus === 'matched') {
     successFactors.push('The Facebook page identity aligns with the submitted business');

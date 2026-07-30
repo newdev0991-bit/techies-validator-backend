@@ -230,6 +230,93 @@ test('rejects a labeled account email until the Facebook page identity is matche
   );
 });
 
+test('accepts missing contacts from a Google-matched official business website', () => {
+  const response = buildCardDataResponse(
+    {
+      ...lead,
+      Name: 'Cheshire Roofing',
+      Address: '60 High Street, Macclesfield',
+      ZIP: 'SK11 8BR'
+    },
+    actorData({
+      pageName: 'Unconfirmed Facebook Account',
+      contact: {
+        phone: '01625 123456',
+        phoneVerified: true,
+        phoneSource: 'google-official-website-tel',
+        email: 'hello@cheshireroofing.example',
+        emailVerified: true,
+        emailSource: 'google-official-website-mailto',
+        website: 'https://cheshireroofing.example',
+        source: 'google-official-website',
+        sourceUrl: 'https://cheshireroofing.example/contact',
+        identityStatus: 'matched',
+        identityConfidence: 'high',
+        searchQuery: '"Cheshire Roofing" "SK11 8BR" contact'
+      },
+      business: {
+        tradingStatus: 'active',
+        isChain: false,
+        isFranchise: false,
+        isLargeBusiness: false,
+        identityStatus: 'unconfirmed',
+        identityConfidence: 'low'
+      }
+    }),
+    { now: NOW }
+  );
+
+  assert.equal(response.validation.verdict, 'MANUAL_REVIEW');
+  assert.equal(response.validation.reasonCode, 'BUSINESS_IDENTITY_UNCONFIRMED');
+  assert.equal(response.lead.phone, '01625 123456');
+  assert.equal(response.lead.email, 'hello@cheshireroofing.example');
+  assert.equal(response.evidence.contact.source, 'google-official-website');
+  assert.equal(response.evidence.contact.identityStatus, 'matched');
+  assert.equal(response.evidence.contact.phoneVerified, true);
+  assert.equal(
+    response.evidence.contact.emailSource,
+    'google-official-website-mailto'
+  );
+  assert.ok(
+    response.analysis.successFactors.some((factor) => /google verified/i.test(factor))
+  );
+});
+
+test('rejects Google contacts when the official website identity is unconfirmed', () => {
+  const response = buildCardDataResponse(
+    lead,
+    actorData({
+      pageName: 'Unconfirmed Facebook Account',
+      contact: {
+        phone: '07700 900123',
+        phoneVerified: true,
+        email: 'wrong@example.test',
+        emailVerified: true,
+        emailSource: 'google-official-website-mailto',
+        source: 'google-official-website',
+        sourceUrl: 'https://unrelated.example.test',
+        identityStatus: 'unconfirmed',
+        identityConfidence: 'low'
+      },
+      business: {
+        tradingStatus: 'active',
+        isChain: false,
+        isFranchise: false,
+        isLargeBusiness: false,
+        identityStatus: 'unconfirmed',
+        identityConfidence: 'low'
+      }
+    }),
+    { now: NOW }
+  );
+
+  assert.equal(response.lead.phone, '');
+  assert.equal(response.lead.email, '');
+  assert.equal(response.evidence.contact.phone, null);
+  assert.equal(response.evidence.contact.email, null);
+  assert.equal(response.evidence.contact.identityStatus, 'unconfirmed');
+});
+
 test('fails a known duplicate identifier', () => {
   const first = buildCardDataResponse(lead, actorData(), { now: NOW });
   const duplicate = buildCardDataResponse(lead, actorData(), {

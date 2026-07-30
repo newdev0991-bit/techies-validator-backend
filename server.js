@@ -414,6 +414,7 @@ async function runFacebookActor(lead, options = {}) {
     activityWindowDays,
     maxPosts,
     includeContactDetails: true,
+    includeGoogleFallback: process.env.GOOGLE_CONTACT_FALLBACK !== 'false',
     includePageDetails: true,
     includePreviousPosts: true
   });
