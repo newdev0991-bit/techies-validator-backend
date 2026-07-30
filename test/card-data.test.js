@@ -137,6 +137,56 @@ test('sends blocked pages to manual review', () => {
   assert.match(response.analysis.recommendedAction, /manually/i);
 });
 
+test('rejects unverified account-level email and sends an uncertain page identity to review', () => {
+  const response = buildCardDataResponse(
+    {
+      ...lead,
+      Name: 'Heritage Roofing & Co',
+      Link: 'https://www.facebook.com/686561021206649'
+    },
+    actorData({
+      pageName: 'Unrelated Personal Profile',
+      canonicalUrl: 'https://www.facebook.com/686561021206649',
+      email: 'signed-in-account@example.test',
+      contact: { email: 'signed-in-account@example.test' },
+      evidence: {
+        activityUrls: ['https://www.facebook.com/686561021206649/posts/123'],
+        contactSourceUrls: [
+          'https://www.facebook.com/686561021206649?sk=about_contact_and_basic_info'
+        ]
+      }
+    }),
+    { now: NOW }
+  );
+
+  assert.equal(response.validation.verdict, 'MANUAL_REVIEW');
+  assert.equal(response.validation.reasonCode, 'BUSINESS_IDENTITY_UNCONFIRMED');
+  assert.equal(response.lead.email, '');
+  assert.equal(response.evidence.contact.email, null);
+  assert.equal(response.evidence.contact.emailVerified, false);
+  assert.equal(response.evidence.contact.emailSource, 'rejected-unverified');
+});
+
+test('accepts an email only when the page contact extractor verifies its provenance', () => {
+  const response = buildCardDataResponse(
+    lead,
+    actorData({
+      contact: {
+        phone: '0151 123 4567',
+        email: 'hello@example.co.uk',
+        emailVerified: true,
+        emailSource: 'mailto-link'
+      }
+    }),
+    { now: NOW }
+  );
+
+  assert.equal(response.validation.verdict, 'PASS');
+  assert.equal(response.lead.email, 'hello@example.co.uk');
+  assert.equal(response.evidence.contact.emailVerified, true);
+  assert.equal(response.evidence.contact.emailSource, 'mailto-link');
+});
+
 test('fails a known duplicate identifier', () => {
   const first = buildCardDataResponse(lead, actorData(), { now: NOW });
   const duplicate = buildCardDataResponse(lead, actorData(), {

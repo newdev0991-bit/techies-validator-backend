@@ -36,9 +36,16 @@ reason codes, and a CSV-ready record. Verdicts are:
 - `FAIL`: inactive outside the window, closed, duplicate, franchise, chain, or
   large business.
 - `MANUAL_REVIEW`: Facebook blocked the scrape or the evidence was insufficient
-  or contradictory.
+  or contradictory, including when the submitted business name cannot be
+  matched reliably to the scraped Facebook page identity.
 
 The service does not convert missing evidence into a PASS or FAIL.
+
+Scraped email addresses are accepted only when the actor marks them as coming
+from a `mailto:` link or an explicitly labelled email field inside the
+business-page contact area. Email text found elsewhere in the authenticated
+Facebook interface is discarded. Emails supplied in the input CSV remain
+trusted as submitted data.
 
 ## Environment
 

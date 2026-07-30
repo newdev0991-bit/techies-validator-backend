@@ -39,6 +39,11 @@ export function normalizePhone(value) {
   return digits ? `+${digits}` : '';
 }
 
+export function normalizeEmail(value) {
+  const email = String(value || '').trim().toLowerCase();
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : '';
+}
+
 export function canonicalizeFacebookUrl(value) {
   if (!value) return '';
   try {
@@ -141,7 +146,16 @@ function tokenSimilarity(left, right) {
     'services',
     'service',
     'company',
-    'co'
+    'co',
+    'roofing',
+    'landscaping',
+    'construction',
+    'contractors',
+    'contractor',
+    'plumbing',
+    'electrical',
+    'building',
+    'builders'
   ]);
   const tokens = (value) =>
     new Set(
@@ -255,14 +269,43 @@ export function normalizeActorEvidence(
   }
 
   const contact = actorData.contact || {};
+  const submittedEmail = normalizeEmail(lead.email);
+  const actorEmail = normalizeEmail(contact.email || actorData.email);
+  const actorEmailSource = String(
+    contact.emailSource || actorData.emailSource || ''
+  ).trim();
+  const actorEmailVerified = Boolean(
+    contact.emailVerified === true ||
+      actorData.emailVerified === true ||
+      ['mailto-link', 'labeled-page-contact'].includes(actorEmailSource)
+  );
+  const acceptedEmail = submittedEmail || (actorEmailVerified ? actorEmail : '');
+  const emailSource = submittedEmail
+    ? 'submitted-lead'
+    : acceptedEmail
+      ? actorEmailSource || 'verified-page-contact'
+      : actorEmail
+        ? 'rejected-unverified'
+        : null;
   const address = actorData.address || {};
   const canonicalUrl = canonicalizeFacebookUrl(
     actorData.canonicalUrl || actorData.pageUrl || lead.link
   );
   const nameSimilarity = tokenSimilarity(lead.name, pageName);
-  const wrongBusiness =
-    actorData.business?.wrongBusiness === true ||
-    (nameSimilarity !== null && nameSimilarity === 0 && normalizeText(lead.name).length >= 4);
+  const actorIdentityStatus = String(actorData.business?.identityStatus || '').toLowerCase();
+  const actorIdentityConfidence = String(
+    actorData.business?.identityConfidence || ''
+  ).toLowerCase();
+  const explicitHighConfidenceMismatch =
+    actorIdentityStatus === 'mismatched' && actorIdentityConfidence === 'high';
+  const identityStatus = explicitHighConfidenceMismatch
+    ? 'mismatched'
+    : actorIdentityStatus === 'matched' || (nameSimilarity !== null && nameSimilarity > 0)
+      ? 'matched'
+      : pageName
+        ? 'unconfirmed'
+        : 'missing';
+  const wrongBusiness = explicitHighConfidenceMismatch;
   const scrape = inferScrapeState(actorData);
 
   return {
@@ -281,7 +324,9 @@ export function normalizeActorEvidence(
     },
     contact: {
       phone: contact.phone || actorData.phone || lead.phone || null,
-      email: contact.email || actorData.email || lead.email || null,
+      email: acceptedEmail || null,
+      emailVerified: Boolean(acceptedEmail),
+      emailSource,
       website: contact.website || actorData.website || null,
       ownerName: contact.ownerName || actorData.ownerName || lead.ownerName || null
     },
@@ -309,7 +354,14 @@ export function normalizeActorEvidence(
       ),
       chainSignals: [...new Set(chainSignals)],
       wrongBusiness,
-      nameSimilarity
+      nameSimilarity,
+      identityStatus,
+      identityConfidence: explicitHighConfidenceMismatch
+        ? 'high'
+        : identityStatus === 'matched'
+          ? 'medium'
+          : 'low',
+      pageNameSource: actorData.pageNameSource || actorData.business?.pageNameSource || null
     },
     evidence: actorData.evidence || {
       activityUrls: recentPosts.map((post) => post.url).filter(Boolean),
@@ -334,8 +386,17 @@ export function determineCardDataVerdict(
   if (evidence.scrape.notFound) {
     return { verdict: 'FAIL', reasonCode: 'BUSINESS_PAGE_NOT_FOUND' };
   }
+  if (evidence.scrape.blocked || evidence.scrape.loginRequired) {
+    return { verdict: 'MANUAL_REVIEW', reasonCode: 'SCRAPE_BLOCKED' };
+  }
   if (evidence.business.wrongBusiness) {
     return { verdict: 'FAIL', reasonCode: 'WRONG_BUSINESS' };
+  }
+  if (
+    evidence.business.identityStatus === 'unconfirmed' ||
+    evidence.business.identityStatus === 'missing'
+  ) {
+    return { verdict: 'MANUAL_REVIEW', reasonCode: 'BUSINESS_IDENTITY_UNCONFIRMED' };
   }
   if (
     evidence.business.tradingStatus === 'closed' ||
@@ -349,9 +410,6 @@ export function determineCardDataVerdict(
     evidence.business.isLargeBusiness
   ) {
     return { verdict: 'FAIL', reasonCode: 'LARGE_CHAIN_OR_FRANCHISE' };
-  }
-  if (evidence.scrape.blocked || evidence.scrape.loginRequired) {
-    return { verdict: 'MANUAL_REVIEW', reasonCode: 'SCRAPE_BLOCKED' };
   }
   if (!evidence.activity.latestPostDate) {
     return { verdict: 'MANUAL_REVIEW', reasonCode: 'NO_DATED_ACTIVITY' };
@@ -389,6 +447,8 @@ export function buildCardDataComment(validation, evidence) {
     DUPLICATE_BUSINESS: 'Duplicate business record based on its normalized business identifier.',
     BUSINESS_PAGE_NOT_FOUND: 'The supplied business page was not found or is unavailable.',
     WRONG_BUSINESS: 'The supplied page appears to belong to a different business.',
+    BUSINESS_IDENTITY_UNCONFIRMED:
+      'The scraper could not reliably confirm that the Facebook page belongs to the submitted business; manual review is required.',
     NOT_TRADING: 'The business appears closed or no longer trading.',
     LARGE_CHAIN_OR_FRANCHISE: 'The business appears to be a large chain or franchise.',
     SCRAPE_BLOCKED: 'The Facebook page was blocked or required login; manual review is required.',
@@ -443,10 +503,7 @@ export function buildCardDataAnalysis(
   if (contactTypes.length) {
     successFactors.push(`Public ${contactTypes.join(', ')} contact details were found`);
   }
-  if (
-    evidence.pageName &&
-    (evidence.business.nameSimilarity === null || evidence.business.nameSimilarity >= 0.5)
-  ) {
+  if (evidence.business.identityStatus === 'matched') {
     successFactors.push('The Facebook page identity aligns with the submitted business');
   }
 
@@ -458,6 +515,12 @@ export function buildCardDataAnalysis(
   }
   if (evidence.business.wrongBusiness) {
     riskFactors.push('The Facebook page identity does not match the submitted business');
+  }
+  if (
+    evidence.business.identityStatus === 'unconfirmed' ||
+    evidence.business.identityStatus === 'missing'
+  ) {
+    riskFactors.push('The Facebook page identity could not be confirmed reliably');
   }
   if (
     evidence.business.tradingStatus === 'closed' ||
@@ -504,6 +567,7 @@ export function buildCardDataAnalysis(
     DUPLICATE_BUSINESS: 98,
     BUSINESS_PAGE_NOT_FOUND: 96,
     WRONG_BUSINESS: 92,
+    BUSINESS_IDENTITY_UNCONFIRMED: 45,
     NOT_TRADING: 94,
     LARGE_CHAIN_OR_FRANCHISE: 93,
     SCRAPE_BLOCKED: 45,
@@ -537,6 +601,8 @@ export function buildCardDataAnalysis(
       'The supplied Facebook page could not be found or was unavailable, so the business and its recent activity cannot be verified from the submitted source.',
     WRONG_BUSINESS:
       'The Facebook page appears to represent a different business from the submitted lead. Using its activity or contact details would create an identity mismatch.',
+    BUSINESS_IDENTITY_UNCONFIRMED:
+      'The scraper could not reliably confirm the Facebook page identity against the submitted business name. Activity and contact details from this page must not be used until the identity is checked.',
     NOT_TRADING:
       'The collected evidence indicates that this business is closed or no longer trading. It does not meet the active-business requirement.',
     LARGE_CHAIN_OR_FRANCHISE:
@@ -559,6 +625,8 @@ export function buildCardDataAnalysis(
       'Confirm the Facebook URL or locate another official business source before progressing this lead.',
     WRONG_BUSINESS:
       'Correct the Facebook URL and rerun validation against the intended business.',
+    BUSINESS_IDENTITY_UNCONFIRMED:
+      'Open the submitted Facebook URL and confirm the page name manually before rerunning validation.',
     NOT_TRADING:
       'Do not progress this lead unless newer evidence proves that the business has resumed trading.',
     LARGE_CHAIN_OR_FRANCHISE:
@@ -632,6 +700,9 @@ export function buildCardDataResponse(
       tradingStatus: evidence.business.tradingStatus,
       businessSize: evidence.business.businessSize,
       chainSignals: evidence.business.chainSignals,
+      identityStatus: evidence.business.identityStatus,
+      identityConfidence: evidence.business.identityConfidence,
+      pageNameSource: evidence.business.pageNameSource,
       contact: evidence.contact,
       address: evidence.address,
       activityUrls: evidence.evidence.activityUrls || [],
