@@ -1,5 +1,7 @@
 // server.js - OpenAI backend (ESM). package.json should include: { "type": "module" }
 import 'dotenv/config';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import express from 'express';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
@@ -10,25 +12,50 @@ import {
   buildCardDataResponse,
   normalizeLead
 } from './src/card-data.js';
+import { applyFreshnessPolicy, evaluateLeadFreshness } from './src/freshness.js';
+import {
+  InvalidProviderResponseError,
+  isSuccessfulFacebookScrape,
+  normalizeAiResponse,
+  parsePositiveNumber,
+  validateFacebookUrl,
+  validateKnownDuplicateKeys,
+  validateLeadRequestBody
+} from './src/validation.js';
 
 const app = express();
 const PORT = process.env.PORT || 4000;
+app.set('trust proxy', 1);
 
 /* ---------- CORS allowlist (Vercel + localhost) ---------- */
-const rawAllow = process.env.FRONTEND_ORIGIN || process.env.ALLOWED_ORIGINS || '';
-const allowlist = [
+const configuredOrigins = [process.env.FRONTEND_ORIGIN, process.env.ALLOWED_ORIGINS]
+  .filter(Boolean)
+  .flatMap(value => value.split(','))
+  .map(value => value.trim())
+  .filter(Boolean);
+const allowlist = [...new Set([
   'http://localhost:3000',
   'http://127.0.0.1:3000',
-  ...rawAllow.split(',').map(s => s.trim()).filter(Boolean)
+  'https://techies-validator2026.vercel.app',
+  'https://techies-validator-frontend-2026-jehu-zachary-sedillos-projects.vercel.app',
+  ...configuredOrigins
+])];
+const projectVercelOriginPatterns = [
+  /^https:\/\/techies-validator-frontend-2026(?:-[a-z0-9]+)?\.vercel\.app$/i,
+  /^https:\/\/techies-validator-frontend-2026(?:-git-[a-z0-9-]+|-[a-z0-9]+)?-jehu-zachary-sedillos-projects\.vercel\.app$/i,
+  /^https:\/\/techies-validator-fro-git-[a-z0-9-]+-jehu-zachary-sedillos-projects\.vercel\.app$/i
 ];
-const projectVercelOrigin =
-  /^https:\/\/(?:techies-validator-frontend-2026(?:-[a-z0-9]+)?|techies-validator-fro-git-[a-z0-9]+-jehu-zachary-sedillos-projects)\.vercel\.app$/i;
 
 const corsOptions = {
   origin(origin, cb) {
     if (!origin) return cb(null, true);            // curl/Postman/no-origin
-    const allowed = allowlist.includes(origin) || projectVercelOrigin.test(origin);
-    return allowed ? cb(null, true) : cb(new Error('Not allowed by CORS'), false);
+    const allowed = allowlist.includes(origin) ||
+      projectVercelOriginPatterns.some(pattern => pattern.test(origin));
+    if (allowed) return cb(null, true);
+    const error = new Error('Origin is not allowed.');
+    error.status = 403;
+    error.code = 'ORIGIN_NOT_ALLOWED';
+    return cb(error, false);
   },
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
@@ -37,120 +64,70 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));               // preflight
 app.use(express.json({ limit: '1mb' }));
-app.use(rateLimit({ windowMs: 60_000, max: 60 }));
+app.use(rateLimit({
+  windowMs: 60_000,
+  max: parsePositiveNumber(process.env.RATE_LIMIT_MAX, 60, { min: 1, max: 10_000 }),
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (_req, res) => sendError(
+    res,
+    429,
+    'RATE_LIMITED',
+    'Too many requests. Please wait and try again.'
+  )
+}));
 
 app.get('/health', (_req, res) => res.json({ ok: true, provider: 'openai' }));
 
-/**
- * Calculate lead freshness based on posted_at_iso timestamp
- * Returns structured freshness object for frontend consumption
- */
-function calculateLeadFreshness(posted_at_iso) {
-  // Return null object if no date provided
-  if (!posted_at_iso) {
-    return {
-      isFresh: null,
-      daysOld: null,
-      postAgeHours: null,
-      timestamp: null,
-      status: 'Unknown - No post date available',
-      scrapedData: false
-    };
-  }
-
-  try {
-    // Parse the ISO timestamp
-    const postedDate = new Date(posted_at_iso);
-    const now = new Date();
-
-    // Validate the parsed date
-    if (isNaN(postedDate.getTime())) {
-      console.warn(`[freshness] Invalid date format: ${posted_at_iso}`);
-      return {
-        isFresh: null,
-        daysOld: null,
-        postAgeHours: null,
-        timestamp: posted_at_iso,
-        status: 'Unknown - Invalid date format',
-        scrapedData: false
-      };
-    }
-
-    // Check if date is in the future (potential timezone issue or data error)
-    if (postedDate > now) {
-      console.warn(`[freshness] Future date detected: ${posted_at_iso}. Treating as fresh.`);
-      return {
-        isFresh: true,
-        daysOld: 0,
-        postAgeHours: 0,
-        timestamp: posted_at_iso,
-        status: 'Fresh - Posted today or future scheduled',
-        scrapedData: true
-      };
-    }
-
-    // Calculate time difference
-    const diffMs = now - postedDate;
-    const diffHours = diffMs / (1000 * 60 * 60);
-    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-
-    // Determine freshness (24-hour threshold)
-    const isFresh = diffHours <= 24;
-
-    // Generate human-readable status
-    let status;
-    if (diffHours <= 1) {
-      status = 'Fresh - Posted within the last hour';
-    } else if (diffHours <= 24) {
-      status = `Fresh - Posted ${diffHours.toFixed(1)} hours ago`;
-    } else if (diffDays === 1) {
-      status = 'Stale - Posted 1 day ago';
-    } else if (diffDays <= 7) {
-      status = `Stale - Posted ${diffDays} days ago`;
-    } else if (diffDays <= 30) {
-      status = `Stale - Posted ${diffDays} days ago (${Math.floor(diffDays / 7)} weeks)`;
-    } else {
-      status = `Stale - Posted ${diffDays} days ago (${Math.floor(diffDays / 30)} months)`;
-    }
-
-    console.log(`[freshness] Calculated for ${posted_at_iso}: isFresh=${isFresh}, ageHours=${diffHours.toFixed(1)}`);
-
-    return {
-      isFresh,
-      daysOld: diffDays,
-      postAgeHours: parseFloat(diffHours.toFixed(2)),
-      timestamp: posted_at_iso,
-      status,
-      scrapedData: true
-    };
-  } catch (error) {
-    console.error(`[freshness] Error calculating freshness:`, error.message);
-    return {
-      isFresh: null,
-      daysOld: null,
-      postAgeHours: null,
-      timestamp: posted_at_iso,
-      status: 'Unknown - Calculation error',
-      scrapedData: false
-    };
+class PublicError extends Error {
+  constructor(status, code, message) {
+    super(message);
+    this.name = 'PublicError';
+    this.status = status;
+    this.code = code;
   }
 }
 
-function buildPrompt(lead) {
-  // Format previousPosts array into readable list
-  const previousPosts = lead?.fetchResults?.rawData?.previousPosts || lead?.fetchResults?.previousPosts || [];
-  const postsCount = Array.isArray(previousPosts) ? previousPosts.length : 0;
-  const formattedPosts = Array.isArray(previousPosts) && previousPosts.length > 0
-    ? previousPosts.slice(0, 10).map((post, idx) => {
+function sendError(res, status, code, message) {
+  return res.status(status).json({ error: { code, message } });
+}
+
+function configuredLeadDateOrder() {
+  return process.env.LEAD_DATE_ORDER?.toUpperCase() === 'DMY' ? 'DMY' : 'MDY';
+}
+
+export function extractPostHistoryEvidence(lead) {
+  const sources = [
+    lead?.fetchResults?.rawData?.activity?.recentPosts,
+    lead?.fetchResults?.rawData?.previousPosts,
+    lead?.fetchResults?.activity?.recentPosts,
+    lead?.fetchResults?.previousPosts
+  ];
+  const suppliedPosts = sources.find(Array.isArray) || [];
+  return {
+    totalPosts: suppliedPosts.length,
+    displayedPosts: suppliedPosts.slice(0, 10)
+  };
+}
+
+export function buildPrompt(lead) {
+  const historyEvidence = extractPostHistoryEvidence(lead);
+  const postsCount = historyEvidence.totalPosts;
+  const formattedPosts = historyEvidence.displayedPosts.length > 0
+    ? historyEvidence.displayedPosts.map((post, idx) => {
         if (typeof post === 'string') return `${idx + 1}. ${post}`;
-        const date = post?.posted_at_iso || post?.posted_at_raw || post?.postDate || 'Unknown date';
-        const text = post?.postText || 'No caption';
+        const date = post?.posted_at_iso || post?.posted_at_raw || post?.postDate ||
+          post?.postedAt || post?.date || 'Unknown date';
+        const text = post?.postText || post?.text || post?.caption || 'No caption';
         return `${idx + 1}. [${date}] ${text}`;
       }).join('\n  ')
-    : 'No previous posts available';
+    : 'No post history evidence was supplied';
 
   // Extract post caption/text
-  const postCaption = lead?.fetchResults?.rawData?.postText || lead?.fetchResults?.postText || 'Not provided';
+  const postCaption = lead?.fetchResults?.rawData?.postText ||
+    lead?.fetchResults?.rawData?.activity?.latestPostText ||
+    lead?.fetchResults?.postText ||
+    'Not provided';
 
   return `You are an expert business lead validator. Analyze this business lead and determine if it's a good prospect for a UK-based B2B sales team.
 
@@ -167,6 +144,12 @@ LEAD DATA:
 - Post Caption/Text: ${postCaption}
 - Previous Posts (Total: ${postsCount}):
   ${formattedPosts}
+
+EVIDENCE INTEGRITY RULES:
+- Use only evidence explicitly supplied above. Never invent, extrapolate, or assume post counts, dates, captions, contact details, or business history.
+- post_history_analysis.total_posts MUST equal ${postsCount}. If it is 0, page_maturity MUST be "unknown" and history claims must say information is insufficient.
+- Do not calculate freshness or infer a post age. The backend reconciles timestamps independently after your response.
+- A proof URL or lead statement alone does not prove the age, identity, or history of a post.
 
 VALIDATION CONTEXT:
 You're evaluating leads for a UK-based B2B service company. Good leads are:
@@ -260,7 +243,7 @@ Analyze this lead carefully and provide your assessment in json format:
 
 {
   "verdict": "GOOD" | "BAD" | "UNCLEAR",
-  "reasoning": "Detailed explanation focusing on caption analysis, post history, timing, and business type",
+  "reasoning": "Detailed explanation using only supplied caption, post history, and business evidence",
   "confidence": 85,
   "key_factors": ["Primary reasons for this verdict"],
   "red_flags": ["Any concerns or negative indicators"],
@@ -274,7 +257,7 @@ Analyze this lead carefully and provide your assessment in json format:
     "summary": "Brief analysis of what the caption indicates"
   },
   "post_history_analysis": {
-    "total_posts": 142,
+    "total_posts": ${postsCount},
     "page_maturity": "new" | "established" | "unknown",
     "posting_pattern": "Brief description of posting pattern if discernible",
     "assessment": "Is this likely a new business page or existing business?"
@@ -284,13 +267,38 @@ Analyze this lead carefully and provide your assessment in json format:
 Your entire response MUST ONLY be a single, valid json object. DO NOT respond with anything other than json.`;
 }
 
+export function constrainAnalysisToEvidence(aiResponse, lead) {
+  const history = extractPostHistoryEvidence(lead);
+  const constrainedHistory = {
+    ...aiResponse.post_history_analysis,
+    total_posts: history.totalPosts
+  };
+  if (history.totalPosts === 0) {
+    constrainedHistory.page_maturity = 'unknown';
+    constrainedHistory.posting_pattern = 'Insufficient information';
+    constrainedHistory.assessment = 'Insufficient information';
+  }
+  return {
+    ...aiResponse,
+    post_history_analysis: constrainedHistory
+  };
+}
+
 async function analyzeHandler(req, res) {
   try {
-    const { lead } = req.body || {};
-    if (!lead) return res.status(400).json({ error: 'Lead data is required.' });
+    const payload = validateLeadRequestBody(req.body);
+    if (!payload.ok) return sendError(res, 400, payload.error.code, payload.error.message);
+    const { lead } = payload;
 
     const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-    if (!OPENAI_API_KEY) return res.status(500).json({ error: 'Missing OPENAI_API_KEY on server.' });
+    if (!OPENAI_API_KEY) {
+      return sendError(
+        res,
+        503,
+        'OPENAI_NOT_CONFIGURED',
+        'Lead analysis is temporarily unavailable.'
+      );
+    }
 
     const model = process.env.MODEL || 'gpt-4o-mini';
     const base = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1/chat/completions';
@@ -301,59 +309,74 @@ async function analyzeHandler(req, res) {
       'For unknown numeric fields, use 0. For unknown boolean fields, use false. For unknown enum fields, use "unknown" ' +
       '(except verdict, which should be "UNCLEAR" if unknown). Do not add extra keys, code fences, or commentary.';
 
-    const r = await fetch(base, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${OPENAI_API_KEY}`
-      },
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: 'system', content: systemMsg },         // contains lowercase "json" to satisfy JSON mode policy
-          { role: 'user', content: buildPrompt(lead) }
-        ],
-        temperature: 0.2,
-        max_tokens: 900,
-        response_format: { type: 'json_object' }          // JSON mode
-      })
+    const timeoutMs = parsePositiveNumber(process.env.OPENAI_TIMEOUT_MS, 45_000, {
+      min: 1_000,
+      max: 120_000
     });
-
-    const raw = await r.text();
-    if (!r.ok) {
-      console.error('OpenAI API error:', raw);
-      return res.status(r.status).json({ error: 'OpenAI API error', details: raw });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    let r;
+    let raw;
+    try {
+      r = await fetch(base, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${OPENAI_API_KEY}`
+        },
+        signal: controller.signal,
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: 'system', content: systemMsg },
+            { role: 'user', content: buildPrompt(lead) }
+          ],
+          temperature: 0.2,
+          max_tokens: 900,
+          response_format: { type: 'json_object' }
+        })
+      });
+      raw = await r.text();
+    } catch (error) {
+      if (error?.name === 'AbortError') {
+        throw new PublicError(504, 'OPENAI_TIMEOUT', 'Lead analysis timed out. Please try again.');
+      }
+      throw new PublicError(502, 'OPENAI_UNAVAILABLE', 'Lead analysis provider is unavailable.');
+    } finally {
+      clearTimeout(timeout);
     }
 
-    const data = JSON.parse(raw);
-    const text = data?.choices?.[0]?.message?.content ?? '{}';
+    if (!r.ok) {
+      console.error(`[analyze] OpenAI request failed with status ${r.status}.`);
+      throw new PublicError(502, 'OPENAI_UPSTREAM_ERROR', 'Lead analysis provider returned an error.');
+    }
 
-    // Parse AI response
-    const aiResponse = JSON.parse(text);
+    let aiResponse;
+    try {
+      const data = JSON.parse(raw);
+      const text = data?.choices?.[0]?.message?.content;
+      if (typeof text !== 'string' || !text.trim()) {
+        throw new InvalidProviderResponseError('OpenAI response did not contain message content.');
+      }
+      aiResponse = constrainAnalysisToEvidence(normalizeAiResponse(JSON.parse(text)), lead);
+    } catch (error) {
+      console.error(`[analyze] Invalid OpenAI response: ${error.name}.`);
+      throw new PublicError(
+        502,
+        'INVALID_OPENAI_RESPONSE',
+        'Lead analysis provider returned an invalid response.'
+      );
+    }
 
-    // Calculate freshness using JavaScript (reliable, not AI)
-    const posted_at_iso =
-      lead?.fetchResults?.rawData?.posted_at_iso ||
-      lead?.fetchResults?.rawData?.posted_at_raw ||
-      lead?.fetchResults?.rawData?.postDate ||
-      lead?.fetchResults?.postDate;
-    const freshnessData = calculateLeadFreshness(posted_at_iso);
+    const freshnessData = evaluateLeadFreshness(lead, {
+      leadDateOrder: configuredLeadDateOrder()
+    });
+    const policyResponse = applyFreshnessPolicy(aiResponse, freshnessData);
 
-    // Merge AI analysis with calculated freshness
     const scrapedResult = lead?.fetchResults?.rawData || lead?.fetchResults || null;
     const enrichedResponse = {
-      ...aiResponse,
+      ...policyResponse,
       freshness: freshnessData,
-      // Override verdict to BAD if lead is stale (over 24 hours)
-      verdict: freshnessData.isFresh === false ? 'BAD' : aiResponse.verdict,
-      // Add freshness-related information to reasoning if stale
-      reasoning: freshnessData.isFresh === false
-        ? `[AUTO REJECTED: Post is ${freshnessData.daysOld} days old - exceeds 24-hour freshness requirement] ${aiResponse.reasoning}`
-        : aiResponse.reasoning,
-      // Add red flag if stale
-      red_flags: freshnessData.isFresh === false
-        ? [...(aiResponse.red_flags || []), `Lead is ${freshnessData.daysOld} days old - exceeds freshness threshold`]
-        : aiResponse.red_flags,
       scraped_post_data: scrapedResult
         ? {
             text: scrapedResult.postText || null,
@@ -361,63 +384,107 @@ async function analyzeHandler(req, res) {
             url: scrapedResult.postUrl || lead['Lead Proof URL'] || null
           }
         : null,
-      apify_scraping_success: Boolean(scrapedResult && scrapedResult.status === 'success'),
+      apify_scraping_success: isSuccessfulFacebookScrape(scrapedResult),
       posted_at: freshnessData.timestamp,
-      needs_manual_review: freshnessData.isFresh === null
+      needs_manual_review: freshnessData.requiresManualReview
     };
 
-    // Keep the frontend contract identical to your Claude version
+    // Preserve the legacy frontend contract while enriching the JSON inside it.
     return res.json({ content: [{ text: JSON.stringify(enrichedResponse) }] });
   } catch (e) {
-    console.error('Analyze error:', e);
-    return res.status(500).json({ error: 'Failed to get AI analysis.' });
+    if (e instanceof PublicError) return sendError(res, e.status, e.code, e.message);
+    console.error(`[analyze] Unexpected ${e?.name || 'Error'}.`);
+    return sendError(res, 500, 'ANALYSIS_FAILED', 'Failed to analyze lead.');
   }
 }
 
 app.post('/validate', analyzeHandler);
 app.post('/analyze', analyzeHandler);
 
-function parseFacebookCookies() {
+export function parseFacebookCookies() {
   const raw = process.env.FACEBOOK_COOKIES;
-  if (!raw) throw new Error('Missing FACEBOOK_COOKIES on server.');
-  const cookies = JSON.parse(raw);
-  if (!Array.isArray(cookies)) throw new Error('FACEBOOK_COOKIES must be a JSON array.');
+  if (!raw) {
+    throw new PublicError(503, 'FACEBOOK_AUTH_NOT_CONFIGURED', 'Facebook scraping is temporarily unavailable.');
+  }
+  let cookies;
+  try {
+    cookies = JSON.parse(raw);
+  } catch {
+    throw new PublicError(503, 'FACEBOOK_AUTH_INVALID', 'Facebook scraping is temporarily unavailable.');
+  }
+  const validCookies = Array.isArray(cookies) && cookies.length > 0 && cookies.every(cookie => {
+    if (!cookie || typeof cookie !== 'object' || Array.isArray(cookie)) return false;
+    if (typeof cookie.name !== 'string' || !cookie.name) return false;
+    if (typeof cookie.value !== 'string' || typeof cookie.domain !== 'string') return false;
+    const rawDomain = cookie.domain.trim().toLowerCase();
+    const hostname = rawDomain.startsWith('.') ? rawDomain.slice(1) : rawDomain;
+    const isFacebookDomain = hostname === 'facebook.com' || hostname.endsWith('.facebook.com');
+    return isFacebookDomain;
+  });
+  if (!validCookies) {
+    throw new PublicError(503, 'FACEBOOK_AUTH_INVALID', 'Facebook scraping is temporarily unavailable.');
+  }
   return cookies;
 }
 
 async function runFacebookActor(lead, options = {}) {
   const APIFY_API_TOKEN = process.env.APIFY_API_TOKEN;
-  if (!APIFY_API_TOKEN) throw new Error('Missing APIFY_API_TOKEN on server.');
+  if (!APIFY_API_TOKEN) {
+    throw new PublicError(503, 'APIFY_NOT_CONFIGURED', 'Facebook scraping is temporarily unavailable.');
+  }
 
   const normalizedLead = normalizeLead(lead);
-  if (!normalizedLead.link) throw new Error('A Facebook/business Link is required.');
+  const linkValidation = validateFacebookUrl(normalizedLead.link);
+  if (!linkValidation.ok) {
+    throw new PublicError(400, linkValidation.error.code, linkValidation.error.message);
+  }
+  normalizedLead.link = linkValidation.value;
 
   const cookies = parseFacebookCookies();
   const client = new ApifyClient({ token: APIFY_API_TOKEN });
   const actorId = process.env.APIFY_ACTOR_ID || 'cE441Keduu5udSFbY';
   const actorClient = client.actor(actorId);
-  const activityWindowDays = Number(
-    options.activityWindowDays ||
-      process.env.ACTIVITY_WINDOW_DAYS ||
-      DEFAULT_ACTIVITY_WINDOW_DAYS
+  const activityWindowDays = parsePositiveNumber(
+    options.activityWindowDays || process.env.ACTIVITY_WINDOW_DAYS,
+    DEFAULT_ACTIVITY_WINDOW_DAYS,
+    { min: 1, max: 3_650 }
   );
-  const maxPosts = Math.max(
-    1,
-    Math.min(20, Number(options.maxPosts || process.env.APIFY_MAX_POSTS || 10))
+  const maxPosts = parsePositiveNumber(
+    options.maxPosts || process.env.APIFY_MAX_POSTS,
+    10,
+    { min: 1, max: 20 }
   );
+  const waitSecs = Math.round(parsePositiveNumber(
+    process.env.APIFY_WAIT_SECS,
+    120,
+    { min: 10, max: 300 }
+  ));
 
   console.log(`[facebook-actor] Starting ${actorId} for ${normalizedLead.link}`);
-  const run = await actorClient.call({
-    cookies: JSON.stringify(cookies),
-    startUrls: [{ url: normalizedLead.link }],
-    lead: normalizedLead,
-    activityWindowDays,
-    maxPosts,
-    includeContactDetails: true,
-    includeGoogleFallback: process.env.GOOGLE_CONTACT_FALLBACK !== 'false',
-    includePageDetails: true,
-    includePreviousPosts: true
-  });
+  const run = await actorClient.call(
+    {
+      cookies: JSON.stringify(cookies),
+      startUrls: [{ url: normalizedLead.link }],
+      lead: normalizedLead,
+      activityWindowDays,
+      maxPosts,
+      includeContactDetails: true,
+      includeGoogleFallback: process.env.GOOGLE_CONTACT_FALLBACK !== 'false',
+      includePageDetails: true,
+      includePreviousPosts: true
+    },
+    { waitSecs }
+  );
+  const runStatus = typeof run?.status === 'string' ? run.status.toUpperCase() : '';
+  if (['READY', 'RUNNING'].includes(runStatus)) {
+    throw new PublicError(504, 'APIFY_TIMEOUT', 'Facebook scraping timed out. Please try again.');
+  }
+  if (runStatus !== 'SUCCEEDED') {
+    throw new PublicError(502, 'APIFY_RUN_FAILED', 'Facebook scraper run did not complete successfully.');
+  }
+  if (!run?.defaultDatasetId) {
+    throw new PublicError(502, 'APIFY_INVALID_RUN', 'Facebook scraper returned an invalid run.');
+  }
   const { items } = await client.dataset(run.defaultDatasetId).listItems({ limit: 10 });
   if (!items?.length) {
     return {
@@ -437,30 +504,41 @@ async function runFacebookActor(lead, options = {}) {
   if (items.length > 1) {
     console.warn(`[facebook-actor] Actor returned ${items.length} items; using consolidated first item.`);
   }
+  if (!items[0] || typeof items[0] !== 'object' || Array.isArray(items[0])) {
+    throw new PublicError(502, 'APIFY_INVALID_RESULT', 'Facebook scraper returned an invalid result.');
+  }
   return items[0];
 }
 
 async function validateBusinessHandler(req, res) {
   const startedAt = Date.now();
   try {
-    const { lead, profile = CARD_DATA_PROFILE, knownDuplicateKeys = [] } = req.body || {};
-    if (!lead) return res.status(400).json({ error: 'lead object is required.' });
+    const payload = validateLeadRequestBody(req.body);
+    if (!payload.ok) return sendError(res, 400, payload.error.code, payload.error.message);
+    const { lead } = payload;
+    const profile = req.body.profile || CARD_DATA_PROFILE;
     if (profile !== CARD_DATA_PROFILE) {
-      return res.status(400).json({
-        error: `Unsupported profile. Use "${CARD_DATA_PROFILE}".`
-      });
+      return sendError(
+        res,
+        400,
+        'UNSUPPORTED_PROFILE',
+        `Unsupported profile. Use "${CARD_DATA_PROFILE}".`
+      );
     }
-    if (!Array.isArray(knownDuplicateKeys)) {
-      return res.status(400).json({ error: 'knownDuplicateKeys must be an array.' });
+    const duplicateKeys = validateKnownDuplicateKeys(req.body.knownDuplicateKeys);
+    if (!duplicateKeys.ok) {
+      return sendError(res, 400, duplicateKeys.error.code, duplicateKeys.error.message);
     }
 
-    const activityWindowDays = Number(
-      process.env.ACTIVITY_WINDOW_DAYS || DEFAULT_ACTIVITY_WINDOW_DAYS
+    const activityWindowDays = parsePositiveNumber(
+      process.env.ACTIVITY_WINDOW_DAYS,
+      DEFAULT_ACTIVITY_WINDOW_DAYS,
+      { min: 1, max: 3_650 }
     );
     const actorData = await runFacebookActor(lead, { activityWindowDays });
     const response = buildCardDataResponse(lead, actorData, {
       activityWindowDays,
-      knownDuplicateKeys,
+      knownDuplicateKeys: duplicateKeys.value,
       processingTimeMs: Date.now() - startedAt
     });
 
@@ -470,11 +548,11 @@ async function validateBusinessHandler(req, res) {
       content: [{ text: JSON.stringify(response) }]
     });
   } catch (error) {
-    console.error('[validate-business] Error:', error.message);
-    return res.status(500).json({
-      error: 'Failed to validate business.',
-      details: error.message
-    });
+    if (error instanceof PublicError) {
+      return sendError(res, error.status, error.code, error.message);
+    }
+    console.error(`[validate-business] Unexpected ${error?.name || 'Error'}.`);
+    return sendError(res, 502, 'FACEBOOK_VALIDATION_FAILED', 'Failed to validate business.');
   }
 }
 
@@ -482,52 +560,83 @@ app.post('/validate-business', validateBusinessHandler);
 
 async function fetchResultsHandler(req, res) {
   try {
-    const { lead } = req.body || {};
-
-    // Validation
-    if (!lead) {
-      return res.status(400).json({ error: 'lead object is required.' });
-    }
+    const payload = validateLeadRequestBody(req.body);
+    if (!payload.ok) return sendError(res, 400, payload.error.code, payload.error.message);
+    const { lead } = payload;
 
     const normalizedLead = normalizeLead(lead);
     const leadProofUrl = normalizedLead.link;
-    if (!leadProofUrl) {
-      return res.status(400).json({ error: 'Lead Proof URL is missing from lead object.' });
+    const linkValidation = validateFacebookUrl(leadProofUrl);
+    if (!linkValidation.ok) {
+      return sendError(res, 400, linkValidation.error.code, linkValidation.error.message);
     }
 
     const result = await runFacebookActor(lead);
-    console.log(`[fetch-results] Actor completed for ${leadProofUrl}: ${result.status || 'unknown'}`);
+    console.log(`[fetch-results] Actor completed: ${result.status || 'unknown'}`);
 
-    // Extract post date from various possible fields
     const postDate = result.postDate || result.posted_at_raw || result.posted_at_iso || null;
-
-    return res.json({
-      success: true,
+    const fetchResults = {
+      success: isSuccessfulFacebookScrape(result),
       postDate,
-      postUrl: result.postUrl || leadProofUrl,
-      postText: result.postText || null,
-      status: result.status || 'success',
-      previousPosts: result.previousPosts || [],
+      posted_at_iso: result.posted_at_iso || null,
+      posted_at_raw: result.posted_at_raw || result.postDate || null,
+      postUrl: result.postUrl || result.activity?.latestPostUrl || linkValidation.value,
+      postText: result.postText || result.activity?.latestPostText || null,
+      status: result.status || 'unknown',
+      previousPosts: Array.isArray(result.previousPosts)
+        ? result.previousPosts
+        : Array.isArray(result.activity?.recentPosts)
+          ? result.activity.recentPosts
+          : [],
       schemaVersion: result.schemaVersion || 'legacy',
       actorData: result,
       rawData: result
+    };
+    const freshness = evaluateLeadFreshness(
+      { ...lead, fetchResults },
+      { leadDateOrder: configuredLeadDateOrder() }
+    );
+
+    return res.json({
+      ...fetchResults,
+      freshness,
+      resolvedPostDate: freshness.timestamp,
+      needsManualReview: freshness.requiresManualReview
     });
 
   } catch (e) {
-    console.error('[fetch-results] Error:', e.message);
-    console.error('[fetch-results] Stack:', e.stack);
-    return res.status(500).json({
-      error: 'Failed to fetch results from Apify.',
-      details: e.message
-    });
+    if (e instanceof PublicError) return sendError(res, e.status, e.code, e.message);
+    console.error(`[fetch-results] Unexpected ${e?.name || 'Error'}.`);
+    return sendError(res, 502, 'APIFY_REQUEST_FAILED', 'Failed to fetch Facebook results.');
   }
 }
 
 app.post('/fetch-results', fetchResultsHandler);
 
-app.listen(PORT, () => {
-  console.log(`OpenAI backend listening on ${PORT}. Allowlist:`, allowlist);
+app.use((_req, res) => sendError(res, 404, 'NOT_FOUND', 'Endpoint not found.'));
+
+app.use((error, _req, res, _next) => {
+  if (error?.type === 'entity.parse.failed') {
+    return sendError(res, 400, 'INVALID_JSON', 'Request body must contain valid JSON.');
+  }
+  if (error?.type === 'entity.too.large') {
+    return sendError(res, 413, 'PAYLOAD_TOO_LARGE', 'Request body exceeds the 1 MB limit.');
+  }
+  if (error?.code === 'ORIGIN_NOT_ALLOWED') {
+    return sendError(res, 403, error.code, 'Request origin is not allowed.');
+  }
+  console.error(`[http] Unexpected ${error?.name || 'Error'}.`);
+  return sendError(res, 500, 'INTERNAL_ERROR', 'An unexpected server error occurred.');
 });
+
+export { app };
+
+const entryPoint = process.argv[1] ? pathToFileURL(path.resolve(process.argv[1])).href : null;
+if (entryPoint === import.meta.url) {
+  app.listen(PORT, () => {
+    console.log(`OpenAI backend listening on ${PORT}. Allowlist:`, allowlist);
+  });
+}
 
 
 
