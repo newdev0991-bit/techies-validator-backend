@@ -12,6 +12,12 @@ import {
   buildCardDataResponse,
   normalizeLead
 } from './src/card-data.js';
+import {
+  buildCotActorInput,
+  cotBatchFingerprint,
+  indexCotActorItems,
+  readCotBatch
+} from './src/cot-batch.js';
 import { applyFreshnessPolicy, evaluateLeadFreshness } from './src/freshness.js';
 import {
   InvalidProviderResponseError,
@@ -47,6 +53,7 @@ const projectVercelOriginPatterns = [
 ];
 
 const corsOptions = {
+  exposedHeaders: ['Retry-After'],
   origin(origin, cb) {
     if (!origin) return cb(null, true);            // curl/Postman/no-origin
     const allowed = allowlist.includes(origin) ||
@@ -77,7 +84,12 @@ app.use(rateLimit({
   )
 }));
 
-app.get('/health', (_req, res) => res.json({ ok: true, provider: 'openai' }));
+app.get('/health', (_req, res) => res.json({
+  ok: true,
+  provider: 'openai',
+  cotBatchContract: process.env.APIFY_ACTOR_CONTRACT || 'cot-data-batch-v1',
+  cotBatchSize: configuredCotBatchSize()
+}));
 
 class PublicError extends Error {
   constructor(status, code, message) {
@@ -90,6 +102,11 @@ class PublicError extends Error {
 
 function sendError(res, status, code, message) {
   return res.status(status).json({ error: { code, message } });
+}
+
+function configuredCotBatchSize(value = process.env.COT_BATCH_SIZE) {
+  const numeric = Number(value);
+  return Number.isSafeInteger(numeric) && numeric >= 1 && numeric <= 10 ? numeric : 3;
 }
 
 function configuredLeadDateOrder() {
@@ -284,111 +301,107 @@ export function constrainAnalysisToEvidence(aiResponse, lead) {
   };
 }
 
+async function analyzeLead(lead) {
+  const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+  if (!OPENAI_API_KEY) {
+    throw new PublicError(503, 'OPENAI_NOT_CONFIGURED', 'Lead analysis is temporarily unavailable.');
+  }
+
+  const model = process.env.MODEL || 'gpt-4o-mini';
+  const base = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1/chat/completions';
+
+  const systemMsg =
+    'You are a strict formatter. Output must be a single valid json object only (note the lowercase word "json"). ' +
+    'Include every key from the schema with appropriate types. For unknown string fields, write "Insufficient information". ' +
+    'For unknown numeric fields, use 0. For unknown boolean fields, use false. For unknown enum fields, use "unknown" ' +
+    '(except verdict, which should be "UNCLEAR" if unknown). Do not add extra keys, code fences, or commentary.';
+
+  const timeoutMs = parsePositiveNumber(process.env.OPENAI_TIMEOUT_MS, 45_000, {
+    min: 1_000,
+    max: 120_000
+  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  let r;
+  let raw;
+  try {
+    r = await fetch(base, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${OPENAI_API_KEY}`
+      },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: 'system', content: systemMsg },
+          { role: 'user', content: buildPrompt(lead) }
+        ],
+        temperature: 0.2,
+        max_tokens: 900,
+        response_format: { type: 'json_object' }
+      })
+    });
+    raw = await r.text();
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw new PublicError(504, 'OPENAI_TIMEOUT', 'Lead analysis timed out. Please try again.');
+    }
+    throw new PublicError(502, 'OPENAI_UNAVAILABLE', 'Lead analysis provider is unavailable.');
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  if (!r.ok) {
+    console.error(`[analyze] OpenAI request failed with status ${r.status}.`);
+    throw new PublicError(502, 'OPENAI_UPSTREAM_ERROR', 'Lead analysis provider returned an error.');
+  }
+
+  let aiResponse;
+  try {
+    const data = JSON.parse(raw);
+    const text = data?.choices?.[0]?.message?.content;
+    if (typeof text !== 'string' || !text.trim()) {
+      throw new InvalidProviderResponseError('OpenAI response did not contain message content.');
+    }
+    aiResponse = constrainAnalysisToEvidence(normalizeAiResponse(JSON.parse(text)), lead);
+  } catch (error) {
+    console.error(`[analyze] Invalid OpenAI response: ${error.name}.`);
+    throw new PublicError(
+      502,
+      'INVALID_OPENAI_RESPONSE',
+      'Lead analysis provider returned an invalid response.'
+    );
+  }
+
+  const freshnessData = evaluateLeadFreshness(lead, {
+    leadDateOrder: configuredLeadDateOrder()
+  });
+  const policyResponse = applyFreshnessPolicy(aiResponse, freshnessData);
+
+  const scrapedResult = lead?.fetchResults?.rawData || lead?.fetchResults || null;
+  return {
+    ...policyResponse,
+    freshness: freshnessData,
+    scraped_post_data: scrapedResult
+      ? {
+          text: scrapedResult.postText || null,
+          author: scrapedResult.pageName || null,
+          url: scrapedResult.postUrl || lead['Lead Proof URL'] || null
+        }
+      : null,
+    apify_scraping_success: isSuccessfulFacebookScrape(scrapedResult),
+    posted_at: freshnessData.timestamp,
+    needs_manual_review: freshnessData.requiresManualReview
+  };
+}
+
 async function analyzeHandler(req, res) {
   try {
     const payload = validateLeadRequestBody(req.body);
     if (!payload.ok) return sendError(res, 400, payload.error.code, payload.error.message);
-    const { lead } = payload;
-
-    const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-    if (!OPENAI_API_KEY) {
-      return sendError(
-        res,
-        503,
-        'OPENAI_NOT_CONFIGURED',
-        'Lead analysis is temporarily unavailable.'
-      );
-    }
-
-    const model = process.env.MODEL || 'gpt-4o-mini';
-    const base = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1/chat/completions';
-
-    const systemMsg =
-      'You are a strict formatter. Output must be a single valid json object only (note the lowercase word "json"). ' +
-      'Include every key from the schema with appropriate types. For unknown string fields, write "Insufficient information". ' +
-      'For unknown numeric fields, use 0. For unknown boolean fields, use false. For unknown enum fields, use "unknown" ' +
-      '(except verdict, which should be "UNCLEAR" if unknown). Do not add extra keys, code fences, or commentary.';
-
-    const timeoutMs = parsePositiveNumber(process.env.OPENAI_TIMEOUT_MS, 45_000, {
-      min: 1_000,
-      max: 120_000
-    });
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
-    let r;
-    let raw;
-    try {
-      r = await fetch(base, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${OPENAI_API_KEY}`
-        },
-        signal: controller.signal,
-        body: JSON.stringify({
-          model,
-          messages: [
-            { role: 'system', content: systemMsg },
-            { role: 'user', content: buildPrompt(lead) }
-          ],
-          temperature: 0.2,
-          max_tokens: 900,
-          response_format: { type: 'json_object' }
-        })
-      });
-      raw = await r.text();
-    } catch (error) {
-      if (error?.name === 'AbortError') {
-        throw new PublicError(504, 'OPENAI_TIMEOUT', 'Lead analysis timed out. Please try again.');
-      }
-      throw new PublicError(502, 'OPENAI_UNAVAILABLE', 'Lead analysis provider is unavailable.');
-    } finally {
-      clearTimeout(timeout);
-    }
-
-    if (!r.ok) {
-      console.error(`[analyze] OpenAI request failed with status ${r.status}.`);
-      throw new PublicError(502, 'OPENAI_UPSTREAM_ERROR', 'Lead analysis provider returned an error.');
-    }
-
-    let aiResponse;
-    try {
-      const data = JSON.parse(raw);
-      const text = data?.choices?.[0]?.message?.content;
-      if (typeof text !== 'string' || !text.trim()) {
-        throw new InvalidProviderResponseError('OpenAI response did not contain message content.');
-      }
-      aiResponse = constrainAnalysisToEvidence(normalizeAiResponse(JSON.parse(text)), lead);
-    } catch (error) {
-      console.error(`[analyze] Invalid OpenAI response: ${error.name}.`);
-      throw new PublicError(
-        502,
-        'INVALID_OPENAI_RESPONSE',
-        'Lead analysis provider returned an invalid response.'
-      );
-    }
-
-    const freshnessData = evaluateLeadFreshness(lead, {
-      leadDateOrder: configuredLeadDateOrder()
-    });
-    const policyResponse = applyFreshnessPolicy(aiResponse, freshnessData);
-
-    const scrapedResult = lead?.fetchResults?.rawData || lead?.fetchResults || null;
-    const enrichedResponse = {
-      ...policyResponse,
-      freshness: freshnessData,
-      scraped_post_data: scrapedResult
-        ? {
-            text: scrapedResult.postText || null,
-            author: scrapedResult.pageName || null,
-            url: scrapedResult.postUrl || lead['Lead Proof URL'] || null
-          }
-        : null,
-      apify_scraping_success: isSuccessfulFacebookScrape(scrapedResult),
-      posted_at: freshnessData.timestamp,
-      needs_manual_review: freshnessData.requiresManualReview
-    };
-
+    const enrichedResponse = await analyzeLead(payload.lead);
     // Preserve the legacy frontend contract while enriching the JSON inside it.
     return res.json({ content: [{ text: JSON.stringify(enrichedResponse) }] });
   } catch (e) {
@@ -510,6 +523,229 @@ async function runFacebookActor(lead, options = {}) {
   return items[0];
 }
 
+function buildFetchResults(result, fallbackUrl) {
+  const postDate = result.postDate || result.posted_at_raw || result.posted_at_iso || null;
+  return {
+    success: isSuccessfulFacebookScrape(result),
+    postDate,
+    posted_at_iso: result.posted_at_iso || null,
+    posted_at_raw: result.posted_at_raw || result.postDate || null,
+    postUrl: result.postUrl || result.activity?.latestPostUrl || fallbackUrl,
+    postText: result.postText || result.activity?.latestPostText || null,
+    status: result.status || 'unknown',
+    previousPosts: Array.isArray(result.previousPosts)
+      ? result.previousPosts
+      : Array.isArray(result.activity?.recentPosts)
+        ? result.activity.recentPosts
+        : [],
+    schemaVersion: result.schemaVersion || 'legacy',
+    contractVersion: result.contractVersion || null,
+    actorData: result,
+    rawData: result
+  };
+}
+
+async function runFacebookActorBatch(rows) {
+  const token = process.env.APIFY_API_TOKEN;
+  if (!token) {
+    throw new PublicError(503, 'APIFY_NOT_CONFIGURED', 'Facebook scraping is temporarily unavailable.');
+  }
+  const cookies = parseFacebookCookies();
+  const entries = rows.map((row) => {
+    const normalizedLead = normalizeLead(row.lead);
+    const linkValidation = validateFacebookUrl(normalizedLead.link);
+    if (!linkValidation.ok) {
+      throw new PublicError(400, linkValidation.error.code, linkValidation.error.message);
+    }
+    normalizedLead.link = linkValidation.value;
+    return {
+      requestKey: row.clientRowId,
+      url: linkValidation.value,
+      lead: normalizedLead
+    };
+  });
+
+  const client = new ApifyClient({ token });
+  const actorId = process.env.APIFY_ACTOR_ID || 'cE441Keduu5udSFbY';
+  const activityWindowDays = parsePositiveNumber(process.env.COT_ACTIVITY_WINDOW_DAYS, 1, {
+    min: 1,
+    max: 3_650
+  });
+  const maxPosts = parsePositiveNumber(process.env.APIFY_MAX_POSTS, 10, { min: 1, max: 20 });
+  const waitSecs = Math.round(parsePositiveNumber(
+    process.env.APIFY_BATCH_WAIT_SECS || process.env.APIFY_WAIT_SECS,
+    300,
+    { min: 10, max: 300 }
+  ));
+  const actorInput = buildCotActorInput(entries, cookies, {
+    activityWindowDays,
+    maxPosts,
+    includeGoogleFallback: process.env.GOOGLE_CONTACT_FALLBACK !== 'false'
+  });
+
+  console.log(`[facebook-actor-batch] Starting ${actorId} for ${entries.length} row(s).`);
+  const run = await client.actor(actorId).call(actorInput, { waitSecs });
+  const runStatus = typeof run?.status === 'string' ? run.status.toUpperCase() : '';
+  if (['READY', 'RUNNING'].includes(runStatus)) {
+    throw new PublicError(504, 'APIFY_TIMEOUT', 'Facebook batch timed out. Please retry the saved batch.');
+  }
+  if (runStatus !== 'SUCCEEDED') {
+    throw new PublicError(503, 'apify_unavailable', 'Facebook batch did not complete successfully.');
+  }
+  if (!run?.defaultDatasetId) {
+    throw new PublicError(502, 'actor_contract_mismatch', 'Facebook batch returned no dataset.');
+  }
+
+  const { items } = await client.dataset(run.defaultDatasetId).listItems({ limit: entries.length + 5 });
+  let indexed;
+  try {
+    indexed = indexCotActorItems(
+      entries,
+      items,
+      process.env.APIFY_ACTOR_CONTRACT || 'cot-data-batch-v1'
+    );
+  } catch (error) {
+    throw new PublicError(502, 'actor_contract_mismatch', error.message);
+  }
+  const missing = entries.filter((entry) => !indexed.has(entry.requestKey));
+  if (missing.length) {
+    throw new PublicError(
+      503,
+      'actor_partial_batch',
+      `Facebook batch omitted requestKey(s): ${missing.map((entry) => entry.requestKey).join(', ')}.`
+    );
+  }
+
+  const actorRows = entries.map((entry) => indexed.get(entry.requestKey));
+  const sessionBlocked = actorRows.some((item) =>
+    item?.scrape?.blocked === true || item?.loginRequired === true || item?.auth_blocked_target === true
+  );
+  if (sessionBlocked) {
+    throw new PublicError(503, 'session_blocked', 'Facebook refused the configured session.');
+  }
+  const retryableFailure = actorRows.some((item) => {
+    const unavailable = item?.notFound === true || /not found|unavailable|doesn't exist/i.test(String(item?.error || ''));
+    return !unavailable && String(item?.status || '').toLowerCase() !== 'success';
+  });
+  if (retryableFailure) {
+    throw new PublicError(503, 'actor_row_failure', 'Facebook did not settle every row in the batch.');
+  }
+
+  return entries.map((entry, index) => buildFetchResults(actorRows[index], entry.url));
+}
+
+const completedCotBatches = new Map();
+const cotBatchEvidence = new Map();
+const activeCotBatches = new Map();
+
+function cacheCotBatch(map, batchId, fingerprint, value) {
+  const ttlMs = parsePositiveNumber(process.env.COT_BATCH_CACHE_TTL_MS, 21_600_000, {
+    min: 60_000,
+    max: 86_400_000
+  });
+  const now = Date.now();
+  for (const [key, entry] of map) {
+    if (entry.expiresAt <= now) map.delete(key);
+  }
+  map.set(batchId, { fingerprint, value, expiresAt: now + ttlMs });
+  while (map.size > 200) map.delete(map.keys().next().value);
+}
+
+function readCotBatchCache(map, batchId, fingerprint) {
+  const entry = map.get(batchId);
+  if (!entry) return null;
+  if (entry.expiresAt <= Date.now()) {
+    map.delete(batchId);
+    return null;
+  }
+  if (entry.fingerprint !== fingerprint) {
+    throw new PublicError(409, 'batch_id_conflict', 'batchId was already used for a different payload.');
+  }
+  return entry.value;
+}
+
+async function runCotValidationBatch(batchId, fingerprint, rows) {
+  let fetchResultsByPosition = readCotBatchCache(cotBatchEvidence, batchId, fingerprint);
+  if (!fetchResultsByPosition) {
+    fetchResultsByPosition = new Array(rows.length).fill(null);
+    const facebookRows = [];
+    const facebookPositions = [];
+    rows.forEach((row, position) => {
+      const proofUrl = normalizeLead(row.lead).link;
+      if (validateFacebookUrl(proofUrl).ok) {
+        facebookRows.push(row);
+        facebookPositions.push(position);
+      }
+    });
+    if (facebookRows.length) {
+      const scraped = await runFacebookActorBatch(facebookRows);
+      facebookPositions.forEach((position, index) => {
+        fetchResultsByPosition[position] = scraped[index];
+      });
+    }
+    cacheCotBatch(cotBatchEvidence, batchId, fingerprint, fetchResultsByPosition);
+  }
+
+  const results = await Promise.all(rows.map(async (row, position) => {
+    const fetchResults = fetchResultsByPosition[position];
+    const leadForAnalysis = fetchResults ? { ...row.lead, fetchResults } : row.lead;
+    const analysis = await analyzeLead(leadForAnalysis);
+    return {
+      clientRowId: row.clientRowId,
+      rowIndex: row.rowIndex,
+      success: true,
+      lead: row.lead,
+      fetchResults,
+      analysis
+    };
+  }));
+  return { success: true, batchId, results };
+}
+
+export function createCotBatchHandler({
+  maxBatchSize,
+  runBatchFn = runCotValidationBatch,
+  completedBatchesMap = completedCotBatches,
+  activeBatchesMap = activeCotBatches
+} = {}) {
+  const configuredMax = configuredCotBatchSize(maxBatchSize ?? process.env.COT_BATCH_SIZE);
+  return async function cotBatchHandler(req, res) {
+    const parsed = readCotBatch(req.body, { maxBatchSize: configuredMax });
+    if (parsed.error) return sendError(res, 400, 'INVALID_BATCH', parsed.error);
+    const fingerprint = cotBatchFingerprint(parsed.rows);
+    try {
+      const completed = readCotBatchCache(completedBatchesMap, parsed.batchId, fingerprint);
+      if (completed) return res.json(completed);
+      const active = activeBatchesMap.get(parsed.batchId);
+      if (active) {
+        if (active.fingerprint !== fingerprint) {
+          return sendError(res, 409, 'batch_id_conflict', 'batchId is already running with a different payload.');
+        }
+        return res.json(await active.promise);
+      }
+      const promise = (async () => {
+        const response = await runBatchFn(parsed.batchId, fingerprint, parsed.rows);
+        cacheCotBatch(completedBatchesMap, parsed.batchId, fingerprint, response);
+        return response;
+      })();
+      const reservation = { fingerprint, promise };
+      activeBatchesMap.set(parsed.batchId, reservation);
+      try {
+        return res.json(await promise);
+      } finally {
+        if (activeBatchesMap.get(parsed.batchId) === reservation) activeBatchesMap.delete(parsed.batchId);
+      }
+    } catch (error) {
+      if (error instanceof PublicError) {
+        if (error.status === 503) res.set('Retry-After', '60');
+        return sendError(res, error.status, error.code, error.message);
+      }
+      console.error(`[validate-batch] Unexpected ${error?.name || 'Error'}.`);
+      return sendError(res, 500, 'BATCH_FAILED', 'Batch validation failed.');
+    }
+  };
+}
+
 async function validateBusinessHandler(req, res) {
   const startedAt = Date.now();
   try {
@@ -574,24 +810,7 @@ async function fetchResultsHandler(req, res) {
     const result = await runFacebookActor(lead);
     console.log(`[fetch-results] Actor completed: ${result.status || 'unknown'}`);
 
-    const postDate = result.postDate || result.posted_at_raw || result.posted_at_iso || null;
-    const fetchResults = {
-      success: isSuccessfulFacebookScrape(result),
-      postDate,
-      posted_at_iso: result.posted_at_iso || null,
-      posted_at_raw: result.posted_at_raw || result.postDate || null,
-      postUrl: result.postUrl || result.activity?.latestPostUrl || linkValidation.value,
-      postText: result.postText || result.activity?.latestPostText || null,
-      status: result.status || 'unknown',
-      previousPosts: Array.isArray(result.previousPosts)
-        ? result.previousPosts
-        : Array.isArray(result.activity?.recentPosts)
-          ? result.activity.recentPosts
-          : [],
-      schemaVersion: result.schemaVersion || 'legacy',
-      actorData: result,
-      rawData: result
-    };
+    const fetchResults = buildFetchResults(result, linkValidation.value);
     const freshness = evaluateLeadFreshness(
       { ...lead, fetchResults },
       { leadDateOrder: configuredLeadDateOrder() }
@@ -612,6 +831,7 @@ async function fetchResultsHandler(req, res) {
 }
 
 app.post('/fetch-results', fetchResultsHandler);
+app.post('/validate-batch', createCotBatchHandler());
 
 app.use((_req, res) => sendError(res, 404, 'NOT_FOUND', 'Endpoint not found.'));
 

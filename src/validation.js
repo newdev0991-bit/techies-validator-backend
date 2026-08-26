@@ -36,6 +36,7 @@ export function validateFacebookUrl(value) {
   if (!['http:', 'https:'].includes(url.protocol) || !isFacebook || url.username || url.password) {
     return error('INVALID_FACEBOOK_URL', 'The proof URL must be an HTTP(S) URL on facebook.com.');
   }
+  url.hash = '';
   return { ok: true, value: url.toString() };
 }
 

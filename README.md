@@ -85,7 +85,12 @@ Copy `.env.example` and configure:
 
 - `APIFY_API_TOKEN`
 - `APIFY_ACTOR_ID` (defaults to `cE441Keduu5udSFbY`)
-- `APIFY_WAIT_SECS` (bounded to 10-300 seconds; defaults to 120)
+- `APIFY_WAIT_SECS` (legacy single-row wait, bounded to 10-300 seconds)
+- `APIFY_BATCH_WAIT_SECS` (strict batch wait, defaults to 300 seconds)
+- `APIFY_ACTOR_CONTRACT=cot-data-batch-v1`
+- `COT_BATCH_SIZE` (defaults to 3; maximum 10)
+- `COT_ACTIVITY_WINDOW_DAYS` (defaults to 1; final freshness is still reconciled at exactly 24 hours)
+- `COT_BATCH_CACHE_TTL_MS` (successful response/evidence replay window; defaults to six hours)
 - `FACEBOOK_COOKIES` as a JSON array string
 - `ALLOWED_ORIGINS`
 - `LEAD_DATE_ORDER` (`MDY` for the current source sheet; `DMY` for a UK-formatted source)
@@ -101,9 +106,15 @@ On Render, use `npm start`. Refresh `FACEBOOK_COOKIES` when the actor reports
 - `POST /validate-business` — Card-data workflow
 - `POST /fetch-results` — structured Apify evidence lookup
 - `POST /analyze` — preserved legacy COT/OpenAI workflow
+- `POST /validate-batch` — strict COT batch workflow with stable row identity and idempotent replay
 
 `POST /validate` is an alias for the legacy `/analyze` endpoint. `/fetch-results`
 also returns the reconciled `freshness` object and `needsManualReview` flag.
+
+`POST /validate-batch` accepts one to `COT_BATCH_SIZE` rows. One Actor run handles all
+Facebook rows in the batch, Actor output is joined only by `requestKey`, and successful evidence
+is checkpointed before concurrent OpenAI analysis. Retrying the same `batchId` reuses completed
+work; reusing it with a different payload returns a conflict.
 
 All endpoint failures use a stable JSON shape and do not expose provider
 payloads, credentials, or stack traces:
