@@ -55,7 +55,7 @@ export function cotBatchFingerprint(rows) {
     .digest('hex');
 }
 
-export function buildCotActorInput(entries, cookies, options = {}) {
+export function buildCotActorInput(entries, options = {}) {
   return {
     requests: entries.map((entry) => ({
       requestKey: entry.requestKey,
@@ -63,7 +63,6 @@ export function buildCotActorInput(entries, cookies, options = {}) {
       lead: entry.lead
     })),
     startUrls: entries.map((entry) => ({ url: entry.url })),
-    cookies: JSON.stringify(cookies),
     activityWindowDays: options.activityWindowDays || 1,
     maxPosts: options.maxPosts || 10,
     includeContactDetails: true,
@@ -95,4 +94,3 @@ export function indexCotActorItems(entries, items, expectedContract = 'cot-data-
 
   return indexed;
 }
-

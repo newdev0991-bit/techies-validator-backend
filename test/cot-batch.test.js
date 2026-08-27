@@ -43,7 +43,8 @@ test('builds and validates the Actor requestKey contract without trusting datase
     url: `https://facebook.com/${index}`,
     lead: row.lead
   }));
-  const input = buildCotActorInput(entries, [{ name: 'c_user', value: '1' }]);
+  const input = buildCotActorInput(entries);
+  assert.equal(Object.hasOwn(input, 'cookies'), false);
   assert.deepEqual(input.requests.map((entry) => entry.requestKey), ['run-1:0', 'run-1:1']);
 
   const items = entries.map((entry) => ({
@@ -63,4 +64,3 @@ test('builds and validates the Actor requestKey contract without trusting datase
     /duplicate requestKey/
   );
 });
-

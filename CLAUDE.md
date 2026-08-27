@@ -83,7 +83,7 @@ The entire backend is contained in a single ESM module (`server.js`). This is in
    - `MODEL` - Defaults to 'gpt-4o-mini'
    - `PORT` - Server port (default: 4000, Render uses 10000)
    - `APIFY_API_TOKEN` - Required for Apify actor execution
-   - `FACEBOOK_COOKIES` - JSON array string of Facebook cookies for authentication. Format: `[{"domain":".facebook.com","name":"c_user","value":"123456","secure":true,"httpOnly":false},...]`
+   - The COT Actor uses logged-out HTTP; Facebook account cookies are not read or forwarded.
    - `MAX_CONCURRENCY` and `PER_REQUEST_DELAY_MS` - Documented but not yet implemented
    - `DEBUG` - Reserved for future use
 

@@ -84,21 +84,21 @@ not present a disputed scrape value as canonical.
 Copy `.env.example` and configure:
 
 - `APIFY_API_TOKEN`
-- `APIFY_ACTOR_ID` (defaults to `cE441Keduu5udSFbY`)
+- `APIFY_ACTOR_ID` (defaults to `J8wBqFJa8GQo9RJ5J`)
 - `APIFY_WAIT_SECS` (legacy single-row wait, bounded to 10-300 seconds)
 - `APIFY_BATCH_WAIT_SECS` (strict batch wait, defaults to 300 seconds)
 - `APIFY_ACTOR_CONTRACT=cot-data-batch-v1`
 - `COT_BATCH_SIZE` (defaults to 3; maximum 10)
 - `COT_ACTIVITY_WINDOW_DAYS` (defaults to 1; final freshness is still reconciled at exactly 24 hours)
 - `COT_BATCH_CACHE_TTL_MS` (successful response/evidence replay window; defaults to six hours)
-- `FACEBOOK_COOKIES` as a JSON array string
 - `ALLOWED_ORIGINS`
 - `LEAD_DATE_ORDER` (`MDY` for the current source sheet; `DMY` for a UK-formatted source)
 - optional legacy OpenAI settings used by `/analyze`, including `OPENAI_TIMEOUT_MS`
 - optional `RATE_LIMIT_MAX` (defaults to 60 requests per minute per client)
 
-On Render, use `npm start`. Refresh `FACEBOOK_COOKIES` when the actor reports
-`loginRequired: true`.
+On Render, use `npm start`. The Actor in `actor/` uses logged-out HTTP and does
+not accept or require Facebook account cookies. Existing cookie environment values
+are ignored. See `actor/COT-PORT.md` for the pinned reference and COT proof rules.
 
 ## Endpoints
 

@@ -1,0 +1,13 @@
+{
+    "actorSpecification": 1,
+    "name": "facebook-post-date-scraper",
+    "title": "COT Logged-out Facebook Proof Validator",
+    "description": "Public HTTP evidence with exact target-post provenance for the COT 24-hour validator. No Facebook account cookies.",
+    "version": "0.1",
+    "buildTag": "latest",
+    "meta": {
+        "templateId": "js-start"
+    },
+    "input": "./input_schema.json",
+    "dockerfile": "../Dockerfile"
+}

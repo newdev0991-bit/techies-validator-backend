@@ -1,0 +1,140 @@
+{
+    "title": "COT Logged-out Facebook Proof Validator Input",
+    "type": "object",
+    "schemaVersion": 1,
+    "properties": {
+        "startUrls": {
+            "title": "Facebook business pages or posts",
+            "type": "array",
+            "description": "Facebook page or post URLs to validate in legacy mode. Batched callers may supply requests instead.",
+            "editor": "requestListSources",
+            "prefill": [
+                {
+                    "url": "https://www.facebook.com/noahhomeandgift"
+                }
+            ]
+        },
+        "lead": {
+            "title": "Lead record",
+            "type": "object",
+            "description": "Optional Card-data lead fields used to preserve source context.",
+            "editor": "json"
+        },
+        "activityWindowDays": {
+            "title": "Activity window (days)",
+            "type": "integer",
+            "description": "A business passes the activity check when qualifying activity is within this window.",
+            "default": 1,
+            "minimum": 1,
+            "maximum": 730
+        },
+        "maxPosts": {
+            "title": "Maximum recent posts",
+            "type": "integer",
+            "description": "Maximum number of recent business-authored activity records to return.",
+            "default": 3,
+            "minimum": 1,
+            "maximum": 20
+        },
+        "includeContactDetails": {
+            "title": "Extract contact details",
+            "type": "boolean",
+            "default": true,
+            "description": "Extract phone, email, address, and website evidence from the Facebook business page."
+        },
+        "includeGoogleFallback": {
+            "title": "Google official-site fallback",
+            "type": "boolean",
+            "default": true,
+            "description": "When Facebook has no verified contact details, search for an identity-matched official business website."
+        },
+        "includePageDetails": {
+            "title": "Extract page details",
+            "type": "boolean",
+            "default": true,
+            "description": "Extract page identity, category, and trading-status evidence."
+        },
+        "includePreviousPosts": {
+            "title": "Extract recent activity",
+            "type": "boolean",
+            "default": true,
+            "description": "Extract recent business-authored activity evidence for the validation window."
+        },
+        "useResidentialProxy": {
+            "title": "Use residential proxy for Facebook",
+            "type": "boolean",
+            "default": true,
+            "description": "Route Facebook reads through residential exit IPs. Each retry draws a new IP, which is what clears the contentless shell page Facebook serves at random."
+        },
+        "facebookProxyCountry": {
+            "title": "Facebook proxy country (ignored)",
+            "type": "string",
+            "editor": "textfield",
+            "default": "GB",
+            "description": "Ignored. Exit countries are chosen automatically for latency to Facebook, which a page render does not depend on. Kept so existing callers keep validating."
+        },
+        "skipContactEnrichmentWhenInactive": {
+            "title": "Skip contact enrichment for inactive leads",
+            "type": "boolean",
+            "default": true,
+            "description": "After recent Facebook activity is confirmed outside the activity window, return the inactive result without expensive Facebook/Google contact enrichment."
+        },
+        "requests": {
+            "title": "Batched validation requests",
+            "type": "array",
+            "description": "Per-row logged-out HTTP input. Each item carries a Facebook proof URL, lead context, and stable requestKey. No Facebook account cookies are used.",
+            "editor": "json",
+            "minItems": 1,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "requestKey": {
+                        "title": "Request key",
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Stable identifier used by the validator backend to map this Actor result back to the source lead."
+                    },
+                    "url": {
+                        "title": "Facebook URL",
+                        "type": "string",
+                        "description": "Facebook business page or post URL for this lead."
+                    },
+                    "lead": {
+                        "title": "Lead record",
+                        "type": "object",
+                        "description": "Lead-specific identity and source fields used while validating this URL."
+                    }
+                },
+                "required": [
+                    "requestKey",
+                    "url"
+                ]
+            }
+        },
+        "googleFallbackBudgetMs": {
+            "title": "Google fallback time budget (ms)",
+            "type": "integer",
+            "description": "Time budget for the identity-matched official-website search. A SERP through the GOOGLE_SERP proxy returns 300-500 KB, so a few seconds is not enough for it to ever succeed.",
+            "default": 45000,
+            "minimum": 10000,
+            "maximum": 120000
+        },
+        "maxRequestRetries": {
+            "title": "Maximum attempts per Facebook request",
+            "type": "integer",
+            "default": 3,
+            "minimum": 1,
+            "maximum": 6,
+            "description": "How many times a failed Facebook read is retried on a fresh exit IP before the row is reported as an error."
+        },
+        "maxConcurrency": {
+            "title": "Maximum leads in parallel",
+            "type": "integer",
+            "default": 5,
+            "minimum": 1,
+            "maximum": 20,
+            "description": "How many leads are validated at the same time. Each lead is two HTTP requests and is almost entirely network wait, so raising this shortens a batch nearly linearly until Facebook starts throttling the exit IPs."
+        }
+    },
+    "required": []
+}

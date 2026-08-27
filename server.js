@@ -415,32 +415,6 @@ async function analyzeHandler(req, res) {
 app.post('/validate', analyzeHandler);
 app.post('/analyze', analyzeHandler);
 
-export function parseFacebookCookies() {
-  const raw = process.env.FACEBOOK_COOKIES;
-  if (!raw) {
-    throw new PublicError(503, 'FACEBOOK_AUTH_NOT_CONFIGURED', 'Facebook scraping is temporarily unavailable.');
-  }
-  let cookies;
-  try {
-    cookies = JSON.parse(raw);
-  } catch {
-    throw new PublicError(503, 'FACEBOOK_AUTH_INVALID', 'Facebook scraping is temporarily unavailable.');
-  }
-  const validCookies = Array.isArray(cookies) && cookies.length > 0 && cookies.every(cookie => {
-    if (!cookie || typeof cookie !== 'object' || Array.isArray(cookie)) return false;
-    if (typeof cookie.name !== 'string' || !cookie.name) return false;
-    if (typeof cookie.value !== 'string' || typeof cookie.domain !== 'string') return false;
-    const rawDomain = cookie.domain.trim().toLowerCase();
-    const hostname = rawDomain.startsWith('.') ? rawDomain.slice(1) : rawDomain;
-    const isFacebookDomain = hostname === 'facebook.com' || hostname.endsWith('.facebook.com');
-    return isFacebookDomain;
-  });
-  if (!validCookies) {
-    throw new PublicError(503, 'FACEBOOK_AUTH_INVALID', 'Facebook scraping is temporarily unavailable.');
-  }
-  return cookies;
-}
-
 async function runFacebookActor(lead, options = {}) {
   const APIFY_API_TOKEN = process.env.APIFY_API_TOKEN;
   if (!APIFY_API_TOKEN) {
@@ -454,9 +428,8 @@ async function runFacebookActor(lead, options = {}) {
   }
   normalizedLead.link = linkValidation.value;
 
-  const cookies = parseFacebookCookies();
   const client = new ApifyClient({ token: APIFY_API_TOKEN });
-  const actorId = process.env.APIFY_ACTOR_ID || 'cE441Keduu5udSFbY';
+  const actorId = process.env.APIFY_ACTOR_ID || 'J8wBqFJa8GQo9RJ5J';
   const actorClient = client.actor(actorId);
   const activityWindowDays = parsePositiveNumber(
     options.activityWindowDays || process.env.ACTIVITY_WINDOW_DAYS,
@@ -477,7 +450,6 @@ async function runFacebookActor(lead, options = {}) {
   console.log(`[facebook-actor] Starting ${actorId} for ${normalizedLead.link}`);
   const run = await actorClient.call(
     {
-      cookies: JSON.stringify(cookies),
       startUrls: [{ url: normalizedLead.link }],
       lead: normalizedLead,
       activityWindowDays,
@@ -532,7 +504,7 @@ function buildFetchResults(result, fallbackUrl) {
     posted_at_iso: result.posted_at_iso || null,
     posted_at_raw: result.posted_at_raw || result.postDate || null,
     postUrl: result.postUrl || result.activity?.latestPostUrl || fallbackUrl,
-    postText: result.postText || result.activity?.latestPostText || null,
+    postText: result.postText || (result.contractVersion === 'cot-data-batch-v1' ? null : result.activity?.latestPostText) || null,
     status: result.status || 'unknown',
     previousPosts: Array.isArray(result.previousPosts)
       ? result.previousPosts
@@ -551,7 +523,6 @@ async function runFacebookActorBatch(rows) {
   if (!token) {
     throw new PublicError(503, 'APIFY_NOT_CONFIGURED', 'Facebook scraping is temporarily unavailable.');
   }
-  const cookies = parseFacebookCookies();
   const entries = rows.map((row) => {
     const normalizedLead = normalizeLead(row.lead);
     const linkValidation = validateFacebookUrl(normalizedLead.link);
@@ -567,7 +538,7 @@ async function runFacebookActorBatch(rows) {
   });
 
   const client = new ApifyClient({ token });
-  const actorId = process.env.APIFY_ACTOR_ID || 'cE441Keduu5udSFbY';
+  const actorId = process.env.APIFY_ACTOR_ID || 'J8wBqFJa8GQo9RJ5J';
   const activityWindowDays = parsePositiveNumber(process.env.COT_ACTIVITY_WINDOW_DAYS, 1, {
     min: 1,
     max: 3_650
@@ -578,7 +549,7 @@ async function runFacebookActorBatch(rows) {
     300,
     { min: 10, max: 300 }
   ));
-  const actorInput = buildCotActorInput(entries, cookies, {
+  const actorInput = buildCotActorInput(entries, {
     activityWindowDays,
     maxPosts,
     includeGoogleFallback: process.env.GOOGLE_CONTACT_FALLBACK !== 'false'
@@ -619,13 +590,13 @@ async function runFacebookActorBatch(rows) {
 
   const actorRows = entries.map((entry) => indexed.get(entry.requestKey));
   const sessionBlocked = actorRows.some((item) =>
-    item?.scrape?.blocked === true || item?.loginRequired === true || item?.auth_blocked_target === true
+    item?.scrape?.blocked === true || item?.scrape?.loginRequired === true || item?.loginRequired === true || item?.auth_blocked_target === true
   );
   if (sessionBlocked) {
-    throw new PublicError(503, 'session_blocked', 'Facebook refused the configured session.');
+    throw new PublicError(503, 'session_blocked', 'Facebook refused the public logged-out request.');
   }
   const retryableFailure = actorRows.some((item) => {
-    const unavailable = item?.notFound === true || /not found|unavailable|doesn't exist/i.test(String(item?.error || ''));
+    const unavailable = item?.scrape?.notFound === true || item?.notFound === true || /not found|unavailable|doesn't exist/i.test(String(item?.error || ''));
     return !unavailable && String(item?.status || '').toLowerCase() !== 'success';
   });
   if (retryableFailure) {
