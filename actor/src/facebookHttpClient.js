@@ -15,6 +15,8 @@
  */
 import { gotScraping } from 'got-scraping';
 
+import { facebookUrl } from './cotUrls.js';
+
 export const FACEBOOK_USER_AGENT =
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36';
 
@@ -170,6 +172,29 @@ export async function openFacebookPageSession(
         { maxAttempts, newProxyUrl, label: 'facebook page fetch', log },
     );
 
+    return result.ok ? { ...result.value, failureReason: null } : { failureReason: result.reason };
+}
+
+// Proof documents can contain useful canonical/route metadata even when the
+// page-timeline loader sees an unavailable shell. Do not require a page ID here.
+export async function openFacebookProofDocument(
+    proofUrl,
+    { newProxyUrl = null, maxAttempts = DEFAULT_MAX_ATTEMPTS, timeoutMs = 30000, log = () => {} } = {},
+) {
+    if (!facebookUrl(proofUrl)) return { failureReason: 'invalid-proof-url' };
+    const result = await withProxyRetries(async (proxyUrl) => {
+        const response = await gotScraping({
+            url: proofUrl, headers: DOCUMENT_HEADERS, proxyUrl: proxyUrl || undefined,
+            followRedirect: true, maxRedirects: 3, throwHttpErrors: false,
+            timeout: { request: timeoutMs },
+            hooks: { beforeRedirect: [(options) => {
+                if (!facebookUrl(String(options.url))) throw new Error('unsafe-proof-redirect');
+            }] },
+        });
+        if (isRetryableStatus(response.statusCode)) return { ok: false, retryable: true, reason: `facebook-http-${response.statusCode}` };
+        if (response.statusCode !== 200) return { ok: false, retryable: false, reason: `facebook-http-${response.statusCode}` };
+        return { ok: true, value: { html: String(response.body || ''), finalUrl: response.url } };
+    }, { maxAttempts, newProxyUrl, label: 'facebook proof fetch', log });
     return result.ok ? { ...result.value, failureReason: null } : { failureReason: result.reason };
 }
 

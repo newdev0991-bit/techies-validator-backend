@@ -98,14 +98,14 @@ function findFirstValue(node, key) {
  * the same edge point at attachments and comment threads, so matching on `url` alone picks the
  * wrong link.
  */
-function findDatedStoryUrl(node) {
-    if (!node || typeof node !== 'object') return '';
-    if (!Array.isArray(node) && node.creation_time && typeof node.url === 'string') return node.url;
+function findDatedStory(node) {
+    if (!node || typeof node !== 'object') return null;
+    if (!Array.isArray(node) && node.creation_time && typeof node.url === 'string') return node;
     for (const value of Array.isArray(node) ? node : Object.values(node)) {
-        const found = findDatedStoryUrl(value);
+        const found = findDatedStory(value);
         if (found) return found;
     }
-    return '';
+    return null;
 }
 
 function epochToIso(epochSeconds) {
@@ -122,8 +122,9 @@ export function parseTimelineEdge(edge) {
     const sections = edge?.node?.comet_sections;
     if (!sections) return null;
 
-    const iso = epochToIso(findFirstValue(sections, 'creation_time'));
-    const postUrl = findDatedStoryUrl(sections);
+    const datedStory = findDatedStory(sections);
+    const iso = epochToIso(datedStory?.creation_time);
+    const postUrl = datedStory?.url;
     if (!iso || !postUrl) return null;
 
     const actor = findFirstValue(findFirstValue(sections, 'actor_photo'), 'actors')?.[0] || {};

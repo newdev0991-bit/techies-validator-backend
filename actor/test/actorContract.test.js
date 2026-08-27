@@ -36,14 +36,14 @@ test('inactive shortcut shares final-output evidence policy and uses an exact mi
     assert.doesNotMatch(shortcut, /daysBetween|Math\.floor/);
 });
 
-test('page evidence is read before the activity scan that the inactive shortcut then gates on', async () => {
+test('public proof is read and page evidence applied before the inactive shortcut', async () => {
     const source = await readMain();
     const evidenceRead = source.indexOf('applyPageEvidence(result, extractPageEvidence(session.html)');
-    const activityRead = source.indexOf('await readTimelineActivity(session, maxPosts, log)');
+    const activityRead = source.indexOf('await readCotProof(url, {');
     const shortcutCall = source.indexOf('isDefinitelyOutsideActivityWindow(result, scopedInput');
 
-    assert.ok(evidenceRead >= 0 && evidenceRead < activityRead);
-    assert.ok(activityRead < shortcutCall);
+    assert.ok(activityRead >= 0 && activityRead < evidenceRead);
+    assert.ok(evidenceRead < shortcutCall);
 });
 
 test('final activity normalization and permalink trust use canonical Facebook identities', async () => {
@@ -75,13 +75,9 @@ test('the timeline server epoch is a trusted activity source and rendered-text s
 
 test('an empty or failed timeline is reported as an incomplete scan, never as a settled one', async () => {
     const source = await readMain();
-    const readerStart = source.indexOf('async function readTimelineActivity');
-    const readerEnd = source.indexOf('function mergeRecentActivityEvidence', readerStart);
-    const reader = source.slice(readerStart, readerEnd);
-
-    assert.match(reader, /const complete = timeline\.posts\.length > 0 && !timeline\.failureReason/);
-    assert.match(reader, /stoppingReason: timeline\.failureReason \|\| TIMELINE_SCAN_REASON/);
-    assert.match(reader, /discoveredCount: timeline\.posts\.length/);
+    assert.match(source, /result\.activityScanComplete = proof\.posts\.length > 0 && !proof\.failureReason/);
+    assert.match(source, /result\.activityWarning = proof\.failureReason/);
+    assert.match(source, /discoveredCount: proof\.posts\.length/);
 });
 
 test('contact evidence is attributed only once the page identity itself matched', async () => {
@@ -120,7 +116,7 @@ test('batch input schema supports requests without legacy startUrls and needs no
 test('Google fallback has a terminal-row guard for auth blocks and row errors', async () => {
     const source = await readMain();
     const fallbackStart = source.indexOf('async function applyGoogleContactFallback');
-    const fallbackEnd = source.indexOf('async function readTimelineActivity', fallbackStart);
+    const fallbackEnd = source.indexOf('function mergeRecentActivityEvidence', fallbackStart);
     const fallback = source.slice(fallbackStart, fallbackEnd);
 
     assert.match(fallback, /result\.status === 'error'/);
@@ -186,7 +182,7 @@ test('rows run concurrently through a bounded pool and each tags its own log lin
     // Interleaved rows are unreadable without a per-row tag, so the row logger is threaded into
     // the helpers rather than each of them writing to console directly.
     assert.match(source, /const log = \(\.\.\.parts\) => console\.log\(`\[\$\{request\.requestKey\}\]`, \.\.\.parts\)/);
-    assert.match(source, /readTimelineActivity\(session, maxPosts, log\)/);
+    assert.match(source, /readCotProof\(url, \{[\s\S]*?log,/);
     assert.match(source, /applyGoogleContactFallback\(result, scopedInput, log\)/);
 });
 
@@ -213,7 +209,7 @@ test('rows finish out of order but reach the dataset in input order', async () =
 test('a Google search runs only for leads with no Facebook contact at all', async () => {
     const source = await readMain();
     const fallbackStart = source.indexOf('async function applyGoogleContactFallback');
-    const fallback = source.slice(fallbackStart, source.indexOf('async function readTimelineActivity', fallbackStart));
+    const fallback = source.slice(fallbackStart, source.indexOf('function mergeRecentActivityEvidence', fallbackStart));
 
     // Two SERP calls cost roughly twice what the rest of a lead costs, so having either contact
     // already is enough to skip the search.

@@ -111,7 +111,8 @@ export function normalizeAiResponse(value) {
       summary: stringValue(caption.summary)
     },
     post_history_analysis: {
-      total_posts: Math.max(0, numberValue(history.total_posts, 0, Number.MAX_SAFE_INTEGER)),
+      total_posts: history.total_posts === null || history.total_posts === undefined
+        ? null : Math.max(0, numberValue(history.total_posts, 0, Number.MAX_SAFE_INTEGER)),
       page_maturity: pageMaturity,
       posting_pattern: stringValue(history.posting_pattern),
       assessment: stringValue(history.assessment)
