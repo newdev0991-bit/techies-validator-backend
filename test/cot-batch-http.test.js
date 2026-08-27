@@ -25,6 +25,21 @@ function batchBody(name = 'Alpha') {
   };
 }
 
+test('COT handler reports safe Apify rejection instead of a generic 500', async () => {
+  const handler = createCotBatchHandler({
+    completedBatchesMap: new Map(), activeBatchesMap: new Map(),
+    runBatchFn: async () => {
+      throw { name: 'ApifyApiError', statusCode: 403, type: 'forbidden', message: 'SECRET' };
+    }
+  });
+  const response = responseRecorder();
+  await handler({ body: batchBody() }, response);
+  assert.equal(response.statusCode, 502);
+  assert.equal(response.body.error.code, 'APIFY_ACCESS_DENIED');
+  assert.doesNotMatch(JSON.stringify(response.body), /SECRET/);
+  assert.equal(response.headers['Retry-After'], undefined);
+});
+
 test('COT batch handler replays a completed response without rerunning providers', async () => {
   let calls = 0;
   const completedBatchesMap = new Map();
@@ -81,4 +96,3 @@ test('COT batch handler rejects malformed rows before provider work', async () =
   assert.equal(response.body.error.code, 'INVALID_BATCH');
   assert.equal(calls, 0);
 });
-

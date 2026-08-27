@@ -6,6 +6,7 @@ import express from 'express';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import { ApifyClient } from 'apify-client';
+import { apifyFailure, checkApifyAccess } from './src/apify-errors.js';
 import {
   CARD_DATA_PROFILE,
   DEFAULT_ACTIVITY_WINDOW_DAYS,
@@ -740,7 +741,12 @@ export function createCotBatchHandler({
         if (error.status === 503) res.set('Retry-After', '60');
         return sendError(res, error.status, error.code, error.message);
       }
-      console.error(`[validate-batch] Unexpected ${error?.name || 'Error'}.`);
+      const providerFailure = apifyFailure(error);
+      if (providerFailure) {
+        console.error(`[validate-batch] ${JSON.stringify(providerFailure.diagnostic)}`);
+        return sendError(res, providerFailure.status, providerFailure.code, providerFailure.message);
+      }
+      console.error('[validate-batch] Unexpected non-provider error.');
       return sendError(res, 500, 'BATCH_FAILED', 'Batch validation failed.');
     }
   };
@@ -855,6 +861,10 @@ const entryPoint = process.argv[1] ? pathToFileURL(path.resolve(process.argv[1])
 if (entryPoint === import.meta.url) {
   app.listen(PORT, () => {
     console.log(`OpenAI backend listening on ${PORT}. Allowlist:`, allowlist);
+    if (process.env.APIFY_API_TOKEN) {
+      const client = new ApifyClient({ token: process.env.APIFY_API_TOKEN, maxRetries: 0, timeoutSecs: 15 });
+      void checkApifyAccess(client.actor(process.env.APIFY_ACTOR_ID || 'cE441Keduu5udSFbY'));
+    }
   });
 }
 
