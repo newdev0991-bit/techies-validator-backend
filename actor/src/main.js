@@ -1,6 +1,6 @@
 import { Actor } from 'apify';
 import { gotScraping } from 'got-scraping';
-import { toCotProofOutput } from './cotProof.js';
+import { cotPageReadUrl, toCotProofOutput } from './cotProof.js';
 
 import { canonicalizeAcceptedActivityObservations, describeActivityStory } from './activityScanPolicy.js';
 import { buildActorRequests } from './batchRequests.js';
@@ -1177,7 +1177,7 @@ async function processRequest(request, index) {
 
   try {
     const targetNavigationStartedAt = Date.now();
-    const session = await openFacebookPageSession(url, {
+    const session = await openFacebookPageSession(cotPageReadUrl(url), {
       newProxyUrl: makeProxyDrawer(index),
       maxAttempts,
       log,

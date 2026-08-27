@@ -12,6 +12,21 @@ export function cotPostKey(value) {
     } catch { return ''; }
 }
 
+// The reference reader extracts a PAGE id to query its public timeline. A post
+// document can be unavailable logged out even when that same story is public in
+// its parent timeline. Derive only an explicit parent; never guess a page id.
+export function cotPageReadUrl(value) {
+    if (!cotPostKey(value)) return value;
+    const url = new URL(value);
+    const parent = url.pathname.match(/^\/([^/]+)\/(?:posts|videos)\/[^/]+\/?$/i);
+    if (parent) return `${url.origin}/${parent[1]}`;
+    const pageId = url.searchParams.get('id');
+    if (url.searchParams.has('story_fbid') && /^\d+$/.test(pageId || '')) {
+        return `${url.origin}/profile.php?id=${pageId}`;
+    }
+    return value;
+}
+
 export function toCotProofOutput(output, result) {
     const requestedUrl = output.inputUrl;
     const targetKey = cotPostKey(requestedUrl);
