@@ -16,6 +16,9 @@ const input=(await defaultStore.getRecord('INPUT'))?.value || {};
 const storeId=process.env.COT_CLOUD_STORE_ID;
 const queueId=process.env.COT_CLOUD_LOCK_QUEUE_ID;
 if(!storeId || !queueId || !process.env.APIFY_ACTOR_RUN_ID) throw new Error('CLOUD_STORAGE_NOT_CONFIGURED');
+// Resource pickers scope the limited run token; pinned IDs prevent accidental
+// schedule edits from switching dedup/budget history to a different store.
+if(input.stateStoreId!==storeId || input.lockQueueId!==queueId) throw new Error('CLOUD_INPUT_STORAGE_MISMATCH');
 const kv=client.keyValueStore(storeId);
 const queue=client.requestQueue(queueId,{clientKey:process.env.APIFY_ACTOR_RUN_ID});
 const lease=new CloudLease(queue);

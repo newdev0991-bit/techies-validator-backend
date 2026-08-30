@@ -46,10 +46,10 @@ export async function initializeStorage(kv,lease,snapshot,config) {
   return marker;
 }
 
-export const scheduleDefinition=actorId=>({
+export const scheduleDefinition=(actorId,stateStoreId,lockQueueId)=>({
   name:'techies-cot-cloud-pipeline',title:'Techies COT pipeline (prepared, disabled)',
   cronExpression:'* * * * *',timezone:'UTC',isEnabled:false,isExclusive:true,
-  actions:[{type:'RUN_ACTOR',actorId,runInput:{body:JSON.stringify({enabled:true}),contentType:'application/json'},
+  actions:[{type:'RUN_ACTOR',actorId,runInput:{body:JSON.stringify({enabled:true,stateStoreId,lockQueueId}),contentType:'application/json'},
     runOptions:{build:'latest',timeoutSecs:900,memoryMbytes:512,restartOnError:false}}]
 });
 
@@ -66,11 +66,13 @@ async function main() {
   if(command==='schedule') {
     const actorId=process.env.COT_CLOUD_ACTOR_ID;
     if(!actorId) throw new Error('COT_CLOUD_ACTOR_ID_REQUIRED');
+    const storeId=process.env.COT_CLOUD_STORE_ID,queueId=process.env.COT_CLOUD_LOCK_QUEUE_ID;
+    if(!storeId||!queueId) throw new Error('CLOUD_STORAGE_IDS_REQUIRED');
     const actor=await client.actor(actorId).get();
     if(actor?.name!=='techies-cot-cloud-pipeline') throw new Error('CONTROLLER_ACTOR_ID_MISMATCH');
     for await(const schedule of client.schedules().list()) if(schedule.name==='techies-cot-cloud-pipeline')
       throw new Error('SCHEDULE_EXISTS_INSPECT_WITHOUT_OVERWRITING');
-    const schedule=await client.schedules().create(scheduleDefinition(actorId));
+    const schedule=await client.schedules().create(scheduleDefinition(actorId,storeId,queueId));
     if(schedule.isEnabled) throw new Error('UNEXPECTED_ENABLED_SCHEDULE');
     console.log(JSON.stringify({scheduleId:schedule.id,isEnabled:false}));return;
   }

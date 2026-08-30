@@ -4,7 +4,9 @@
   "schemaVersion": 1,
   "properties": {
     "enabled": {"title":"Allow processing", "type":"boolean", "default":false,
-      "description":"Processing also requires the operator-managed CONFIG and PIPELINE_LIVE_ENABLED switch. Defaults to a no-provider-call status run."}
+      "description":"Processing also requires the operator-managed CONFIG and PIPELINE_LIVE_ENABLED switch. Defaults to a no-provider-call status run."},
+    "stateStoreId": {"title":"Pipeline state store", "type":"string", "editor":"resourcePicker", "resourceType":"keyValueStore", "resourcePermissions":["READ","WRITE"], "description":"Must match COT_CLOUD_STORE_ID. Grants access only to the selected pipeline storage."},
+    "lockQueueId": {"title":"Pipeline lock queue", "type":"string", "editor":"resourcePicker", "resourceType":"requestQueue", "resourcePermissions":["READ","WRITE"], "description":"Must match COT_CLOUD_LOCK_QUEUE_ID. Use a dedicated queue."}
   },
-  "required": []
+  "required": ["stateStoreId","lockQueueId"]
 }

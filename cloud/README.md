@@ -18,10 +18,13 @@ Manual validation remains available at `/manual` and `/cot`.
   `COT_VALIDATOR_BASE_URL=https://techies-validator-backend-i71b.onrender.com`,
   matching secret `COT_PIPELINE_API_KEY`, and `PIPELINE_LIVE_ENABLED=false`.
   Apify supplies the runtime `APIFY_TOKEN`; never copy an account token into Git.
-  Its access must cover the named storage/queue and existing search Actor.
+  Keep Limited permissions. The input resource pickers `stateStoreId` and
+  `lockQueueId` grant read/write access to those two resources and must match
+  the environment IDs. The child search Actor must also use Limited permissions.
 - Default run: 512 MB, 900-second timeout, automatic restart disabled.
 - Schedule: every minute in UTC, exclusive execution, **disabled** initially.
-  Input `{ "enabled": true }` does not enable processing by itself: named
+  Input includes `enabled`, `stateStoreId`, and `lockQueueId`. Setting enabled
+  true does not enable processing by itself: named
   storage `CONFIG.enabled` and the Actor environment switch must also be true.
 
 ## Preserve the canary before starting

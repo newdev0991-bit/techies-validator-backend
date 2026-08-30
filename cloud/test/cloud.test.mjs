@@ -95,11 +95,12 @@ test('migration preserves the source database and counters, and refuses a second
 });
 
 test('the prepared schedule is disabled, exclusive and bounded',()=>{
-  const schedule=scheduleDefinition('controller-id');
+  const schedule=scheduleDefinition('controller-id','state-store','lock-queue');
   assert.equal(schedule.isEnabled,false);assert.equal(schedule.isExclusive,true);
   assert.equal(schedule.actions[0].actorId,'controller-id');
   assert.equal(schedule.actions[0].runOptions.restartOnError,false);
   assert.equal(schedule.actions[0].runOptions.timeoutSecs,900);
+  assert.deepEqual(JSON.parse(schedule.actions[0].runInput.body),{enabled:true,stateStoreId:'state-store',lockQueueId:'lock-queue'});
 });
 
 test('a slow lock response never extends ownership past its conservative deadline',async()=>{
