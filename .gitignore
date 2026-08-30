@@ -36,3 +36,4 @@ pipeline/output/
 pipeline/.env
 pipeline/canary-data/
 pipeline/canary-output/
+pipeline/cloud-migration/

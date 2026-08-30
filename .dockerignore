@@ -5,6 +5,7 @@ pipeline/data
 pipeline/output
 pipeline/canary-data
 pipeline/canary-output
+pipeline/cloud-migration
 pipeline/config.json
 **/*.sqlite*
 **/*.log

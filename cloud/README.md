@@ -51,6 +51,15 @@ schedule through the official API. It refuses an existing same-name schedule
 instead of overwriting it. Neither setup command builds or starts an Actor.
 Alternatively configure the same values through Apify Console.
 
+For a Console-only migration, `node cloud/setup.mjs bundle` creates a fresh,
+Git-ignored `pipeline/cloud-migration` directory of JSON records. Upload
+INITIALIZATION first, CONFIG/RESULTS and all chunk files next, and STATE last.
+Set each record key to the filename without `.json`, retaining application/json.
+Only do this in a newly created empty store, with the controller unbuilt/stopped
+and its schedule disabled. Verify every uploaded JSON value against its local
+bundle before starting. A bundle upload does not acquire the API queue lease;
+never use it against an active controller or to overwrite existing state.
+
 ## Frontend connection
 
 The frontend branch `codex/apify-cot-cloud-results` requires server-only values:

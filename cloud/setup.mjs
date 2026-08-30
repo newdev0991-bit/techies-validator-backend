@@ -1,6 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import { createHash,randomUUID } from 'node:crypto';
-import { mkdtempSync,readFileSync,rmSync } from 'node:fs';
+import { mkdirSync,mkdtempSync,readFileSync,rmSync,writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -55,11 +55,23 @@ export const scheduleDefinition=(actorId,stateStoreId,lockQueueId)=>({
 
 async function main() {
   const [command,filename]=process.argv.slice(2);
-  if(!['plan','initialize','schedule'].includes(command)) throw new Error('USE_plan_DATABASE_OR_initialize_DATABASE_OR_schedule');
+  if(!['plan','bundle','initialize','schedule'].includes(command)) throw new Error('USE_plan_bundle_initialize_DATABASE_OR_schedule');
   const snapshot=command!=='schedule'?readSnapshot(path.resolve(filename||'pipeline/canary-data/pipeline.sqlite')):null;
   if(command==='plan') {
     const {results,...plan}=migrationPlan(snapshot);
     console.log(JSON.stringify({...plan,resultCounts:results.counts,enabled:false},null,2));return;
+  }
+  if(command==='bundle') {
+    const directory=path.resolve('pipeline/cloud-migration');
+    // A fresh directory makes every manual upload bundle auditable; no overwrites.
+    mkdirSync(directory);
+    const records=new Map();
+    const kv={async getRecord(key){return records.has(key)?{value:records.get(key)}:undefined;},
+      async setRecord({key,value}){records.set(key,value);}};
+    const config=JSON.parse(readFileSync(new URL('../pipeline/config.canary.example.json',import.meta.url)));
+    const marker=await initializeStorage(kv,{async assert(){}},snapshot,config);
+    for(const [key,value] of records) writeFileSync(path.join(directory,`${key}.json`),JSON.stringify(value,null,2));
+    console.log(JSON.stringify({directory,keys:[...records.keys()],...marker},null,2));return;
   }
   if(!process.env.APIFY_API_TOKEN) throw new Error('APIFY_API_TOKEN_REQUIRED_IN_SECURE_ENVIRONMENT');
   const client=new ApifyClient({token:process.env.APIFY_API_TOKEN,maxRetries:0,timeoutSecs:30});
