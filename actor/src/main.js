@@ -1,15 +1,15 @@
 import { Actor } from 'apify';
 import { gotScraping } from 'got-scraping';
-import { cotPageReadUrl, toCotProofOutput } from './cotProof.js';
+import { toCotProofOutput } from './cotProof.js';
+import { readCotProof } from './cotReader.js';
 
 import { canonicalizeAcceptedActivityObservations, describeActivityStory } from './activityScanPolicy.js';
 import { buildActorRequests } from './batchRequests.js';
 import { completedBatchRequestKeys } from './batchResume.js';
 import { createProxySessionId } from './browserProxy.js';
 import { classifyChainSignals } from './chainSignals.js';
-import { openFacebookPageSession } from './facebookHttpClient.js';
 import { extractPageEvidence } from './facebookPageEvidence.js';
-import { fetchTimelinePosts,TIMELINE_TIME_SOURCE } from './facebookTimelineFeed.js';
+import { TIMELINE_TIME_SOURCE } from './facebookTimelineFeed.js';
 import { fetchGoogleSerp } from './googleSerp.js';
 import { htmlToVisibleText, readHtmlAnchors, readHtmlTitle } from './htmlText.js';
 
@@ -496,41 +496,6 @@ async function applyGoogleContactFallback(result, input, log = console.log) {
   }
 }
 
-/**
- * Read the page's recent activity from Facebook's own timeline query.
- *
- * Shaped like the scan reads the evidence policy already consumes, so an empty or failed timeline
- * is a normal "no attributed stories" outcome rather than a special case.
- */
-async function readTimelineActivity(session, maxPosts, log = console.log) {
-  const timeline = await fetchTimelinePosts(session, { limit: maxPosts, log });
-
-  if (!timeline.posts.length) {
-    log(`timeline returned no dated posts (${timeline.failureReason})`);
-  } else {
-    log(`timeline returned ${timeline.posts.length} dated post(s)`);
-  }
-
-  const complete = timeline.posts.length > 0 && !timeline.failureReason;
-  return {
-    posts: timeline.posts,
-    boundedComplete: complete,
-    // Server epochs carry none of the rendered-text ambiguity the old DOM scan had to reconcile,
-    // so there is no per-story evidence to cross-check between passes.
-    evidenceFingerprints: { accepted: [], ambiguous: [] },
-    reconciliationConflicts: [],
-    scan: {
-      complete,
-      stoppingReason: timeline.failureReason || TIMELINE_SCAN_REASON,
-      rounds: 1,
-      stableRounds: 0,
-      discoveredCount: timeline.posts.length,
-      ambiguousCount: 0,
-      conflictCount: 0,
-    },
-  };
-}
-
 function mergeRecentActivityEvidence(postCollections, maxResults) {
   const observations = postCollections
     .flat()
@@ -556,7 +521,6 @@ function mergeRecentActivityEvidence(postCollections, maxResults) {
 const TRUSTED_ACTIVITY_SOURCES = new Set([TIMELINE_TIME_SOURCE]);
 
 const ACTIVITY_DAY_MS = 24 * 60 * 60 * 1000;
-const TIMELINE_SCAN_REASON = 'logged-out-timeline';
 
 function isActivityPostPermalink(value) {
   const url = canonicalizeFacebookUrl(value || '');
@@ -978,8 +942,8 @@ function applyPageEvidence(result, evidence, lead) {
 
 /**
  * When the caller passed a permalink rather than a page URL, report that post as the row's target.
- * The timeline is the only date source now, so a target post is only dated when it is recent
- * enough to still be in the sampled window - which is exactly when its date matters.
+ * These are legacy Card-data compatibility fields. The final COT adapter makes
+ * the proof decision using exact post identity, including verified document aliases.
  */
 function applyTargetPostEvidence(result, posts) {
   const targetKey = describeActivityStory(
@@ -1177,18 +1141,28 @@ async function processRequest(request, index) {
 
   try {
     const targetNavigationStartedAt = Date.now();
-    const session = await openFacebookPageSession(cotPageReadUrl(url), {
+    const proof = await readCotProof(url, {
       newProxyUrl: makeProxyDrawer(index),
       maxAttempts,
+      maxPosts,
+      includePreviousPosts: scopedInput.includePreviousPosts,
       log,
     });
     result.stageTimingsMs.targetNavigation = Date.now() - targetNavigationStartedAt;
-
-    if (session.failureReason) throw new Error(session.failureReason);
-    result.pageId = session.pageId;
+    result.proofResolution = proof.resolution;
+    result.proofPreview = proof.preview;
+    result.proofFailureReason = proof.failureReason;
+    result.previousPosts = proof.posts;
+    result.activityScanAttempted = proof.scanAttempted;
+    result.activityScanComplete = proof.posts.length > 0 && !proof.failureReason;
+    result.activityScanStoppingReason = proof.failureReason || 'bounded-public-proof-read';
+    result.activityWarning = proof.failureReason;
+    const session = proof.session;
+    if (!session && !proof.posts.length) throw new Error(proof.failureReason || 'proof-document-has-no-dated-story');
+    result.pageId = session?.pageId || null;
     result.pageUrl = canonicalizeFacebookUrl(derivePageUrlFromPostUrl(url) || url);
 
-    applyPageEvidence(result, extractPageEvidence(session.html), scopedInput.lead);
+    if (session) applyPageEvidence(result, extractPageEvidence(session.html), scopedInput.lead);
     log('page evidence:', {
       pageName: result.pageName,
       identity: result.identityStatus,
@@ -1197,23 +1171,9 @@ async function processRequest(request, index) {
       website: Boolean(result.website),
     });
 
-    if (scopedInput.includePreviousPosts !== false) {
-      const activityStartedAt = Date.now();
-      const activityRead = await readTimelineActivity(session, maxPosts, log);
-      result.stageTimingsMs.activityScan = Date.now() - activityStartedAt;
-      result.activityScanAttempted = true;
-      result.previousPosts = activityRead.posts;
-      result.activityScanPasses = [{ pass: 'primary', ...activityRead.scan }];
-      result.activityScanStoppingReason = activityRead.scan.stoppingReason;
-      result.activityScanComplete = activityRead.scan.complete;
-      if (!activityRead.posts.length) {
-        result.activityWarning = 'activity-scan-returned-no-attributed-stories';
-      }
-      applyTargetPostEvidence(result, activityRead.posts);
-    } else {
-      result.activityScanStoppingReason = 'disabled';
-      result.activityWarning = 'activity-scan-disabled';
-    }
+    result.activityScanPasses = [{ pass: 'public-proof', complete: result.activityScanComplete,
+      stoppingReason: result.activityScanStoppingReason, discoveredCount: proof.posts.length }];
+    applyTargetPostEvidence(result, proof.posts);
 
     result.activityDecisionAt = new Date().toISOString();
     result.status = 'success';

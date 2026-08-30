@@ -108,7 +108,7 @@ test('HTTP analyze preserves legacy envelope and enforces reconciled freshness p
   assert.equal(genesis.posted_at, null);
   assert.equal(genesis.freshness.reasonCode, 'DATE_CONFLICT');
   assert.equal(genesis.freshness.autoRejectEligible, false);
-  assert.equal(genesis.post_history_analysis.total_posts, 0);
+  assert.equal(genesis.post_history_analysis.total_posts, null);
   assert.equal(genesis.post_history_analysis.page_maturity, 'unknown');
   assert.doesNotMatch(genesis.reasoning, /AUTO REJECTED/);
 

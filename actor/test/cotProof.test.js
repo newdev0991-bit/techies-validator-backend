@@ -9,8 +9,8 @@ const convert = (posts, output = item) => toCotProofOutput(output, { previousPos
 
 test('public timeline lookup derives only explicit parent pages and preserves unknown URLs', () => {
   assert.equal(cotPageReadUrl(inputUrl), 'https://www.facebook.com/example');
-  assert.equal(cotPageReadUrl('https://facebook.com/permalink.php?story_fbid=123&id=7'), 'https://facebook.com/profile.php?id=7');
-  assert.equal(cotPageReadUrl('https://facebook.com/reel/123'), 'https://facebook.com/reel/123');
+  assert.equal(cotPageReadUrl('https://facebook.com/permalink.php?story_fbid=123&id=7'), 'https://www.facebook.com/profile.php?id=7');
+  assert.equal(cotPageReadUrl('https://facebook.com/reel/123'), 'https://www.facebook.com/reel/123');
 });
 
 test('COT exact post carries trustworthy server time and stable batch identity', () => {

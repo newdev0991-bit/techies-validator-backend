@@ -130,9 +130,12 @@ export function extractPostHistoryEvidence(lead) {
     lead?.fetchResults?.activity?.recentPosts,
     lead?.fetchResults?.previousPosts
   ];
-  const suppliedPosts = sources.find(Array.isArray) || [];
+  const suppliedPosts = sources.find(value => Array.isArray(value) && value.length > 0) || [];
   return {
-    totalPosts: suppliedPosts.length,
+    // A bounded, author-filtered sample is not the publisher's lifetime count.
+    // In particular an empty/rejected/unavailable sample proves no zero count.
+    totalPosts: suppliedPosts.length || null,
+    evidenceStatus: suppliedPosts.length ? 'sample_available' : 'unavailable',
     displayedPosts: suppliedPosts.slice(0, 10)
   };
 }
@@ -151,8 +154,9 @@ export function buildPrompt(lead) {
     : 'No post history evidence was supplied';
 
   // Extract post caption/text
+  const cotProof = lead?.fetchResults?.rawData?.contractVersion === 'cot-data-batch-v1';
   const postCaption = lead?.fetchResults?.rawData?.postText ||
-    lead?.fetchResults?.rawData?.activity?.latestPostText ||
+    (!cotProof && lead?.fetchResults?.rawData?.activity?.latestPostText) ||
     lead?.fetchResults?.postText ||
     'Not provided';
 
@@ -169,12 +173,13 @@ LEAD DATA:
 - County: ${lead['County'] || 'Not provided'}
 - Old Address: ${lead['Old Address? (For relocation, new branch, and moving premises only with no given address)'] || 'Not provided'}
 - Post Caption/Text: ${postCaption}
-- Previous Posts (Total: ${postsCount}):
+- Previous Posts (Verified sample: ${postsCount ?? 'unavailable'}; not a lifetime post count):
   ${formattedPosts}
 
 EVIDENCE INTEGRITY RULES:
 - Use only evidence explicitly supplied above. Never invent, extrapolate, or assume post counts, dates, captions, contact details, or business history.
-- post_history_analysis.total_posts MUST equal ${postsCount}. If it is 0, page_maturity MUST be "unknown" and history claims must say information is insufficient.
+- post_history_analysis.total_posts MUST equal ${postsCount}. This is only the supplied sample size, never a lifetime count. If null, page_maturity MUST be "unknown" and history claims must say information is insufficient.
+- Missing or author-rejected history is NOT evidence of zero posts, a new page, inactivity, or an established business. Do not use it in verdict, scores, key factors, or red flags.
 - Do not calculate freshness or infer a post age. The backend reconciles timestamps independently after your response.
 - A proof URL or lead statement alone does not prove the age, identity, or history of a post.
 
@@ -298,16 +303,34 @@ export function constrainAnalysisToEvidence(aiResponse, lead) {
   const history = extractPostHistoryEvidence(lead);
   const constrainedHistory = {
     ...aiResponse.post_history_analysis,
-    total_posts: history.totalPosts
+    total_posts: history.totalPosts,
+    evidence_status: history.evidenceStatus,
+    count_scope: 'supplied_sample'
   };
-  if (history.totalPosts === 0) {
+  if (history.totalPosts === null) {
     constrainedHistory.page_maturity = 'unknown';
     constrainedHistory.posting_pattern = 'Insufficient information';
     constrainedHistory.assessment = 'Insufficient information';
   }
   return {
     ...aiResponse,
+    ...(history.totalPosts === null ? removeUnsupportedHistoryClaims(aiResponse) : {}),
     post_history_analysis: constrainedHistory
+  };
+}
+
+// The model sometimes ignores the missing-history rule in prose even when its
+// structured field is corrected. Remove those unsupported narrative/factor
+// claims too; never turn extraction failure into evidence of a young business.
+function removeUnsupportedHistoryClaims(analysis) {
+  const historyClaim = /\b(?:post(?:ing)?\s+(?:history|pattern|count)|previous posts|total posts|(?:0|zero|no)\s+(?:(?:previous|total)\s+)?posts|page(?:'s)?\s+maturity|(?:new|established|old|inactive)\s+(?:business\s+)?page|absence of (?:previous )?posts|(?:lack|absence) of (?:an? )?established (?:presence|posting history))\b/i;
+  const clean = value => String(value || '').split(/(?<=[.!?])\s+/)
+    .filter(sentence => !historyClaim.test(sentence)).join(' ').trim();
+  return {
+    reasoning: `${clean(analysis.reasoning)} Posting history was not verified and cannot establish business age or activity.`.trim(),
+    key_factors: (analysis.key_factors || []).filter(value => !historyClaim.test(value)),
+    red_flags: (analysis.red_flags || []).filter(value => !historyClaim.test(value)),
+    recommended_action: clean(analysis.recommended_action) || 'Review the available proof evidence.',
   };
 }
 

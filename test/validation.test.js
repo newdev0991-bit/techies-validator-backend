@@ -66,9 +66,9 @@ test('normalizes the AI response to the promised schema', () => {
   assert.equal(normalized.post_history_analysis.page_maturity, 'established');
 });
 
-test('normalizes absent post history to zero and unknown', () => {
+test('normalizes absent post history to null and unknown', () => {
   const normalized = normalizeAiResponse({ verdict: 'UNCLEAR' });
-  assert.equal(normalized.post_history_analysis.total_posts, 0);
+  assert.equal(normalized.post_history_analysis.total_posts, null);
   assert.equal(normalized.post_history_analysis.page_maturity, 'unknown');
 });
 
