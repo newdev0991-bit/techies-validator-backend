@@ -1,4 +1,5 @@
 import { describeActivityStory } from './activityScanPolicy.js';
+import { cotContactEvidence } from './cotContacts.js';
 
 // Keep the reference transport unchanged. COT accepts only the submitted post's
 // server timestamp, never the page's latest activity or a rendered date estimate.
@@ -46,6 +47,7 @@ export function toCotProofOutput(output, result) {
         !targetKey ? 'target-post-identity-unresolved' : candidates.length ? 'target-date-untrusted' : 'target-not-in-public-sample';
     return {
         ...output,
+        ...cotContactEvidence(output, result),
         contractVersion: 'cot-data-batch-v1',
         engineVersion: 'cot-http-v1',
         postUrl: requestedUrl,

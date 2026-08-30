@@ -20,6 +20,7 @@ import {
   readCotBatch
 } from './src/cot-batch.js';
 import { applyFreshnessPolicy, evaluateLeadFreshness } from './src/freshness.js';
+import { enrichCotContacts, cotLeadWithContacts } from './src/cot-contacts.js';
 import {
   InvalidProviderResponseError,
   isSuccessfulFacebookScrape,
@@ -303,6 +304,8 @@ export function constrainAnalysisToEvidence(aiResponse, lead) {
 }
 
 async function analyzeLead(lead) {
+  const contactEnrichment = enrichCotContacts(lead);
+  const analysisLead = cotLeadWithContacts(lead, contactEnrichment);
   const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
   if (!OPENAI_API_KEY) {
     throw new PublicError(503, 'OPENAI_NOT_CONFIGURED', 'Lead analysis is temporarily unavailable.');
@@ -337,7 +340,7 @@ async function analyzeLead(lead) {
         model,
         messages: [
           { role: 'system', content: systemMsg },
-          { role: 'user', content: buildPrompt(lead) }
+          { role: 'user', content: buildPrompt(analysisLead) }
         ],
         temperature: 0.2,
         max_tokens: 900,
@@ -384,6 +387,7 @@ async function analyzeLead(lead) {
   const scrapedResult = lead?.fetchResults?.rawData || lead?.fetchResults || null;
   return {
     ...policyResponse,
+    contact_enrichment: contactEnrichment,
     freshness: freshnessData,
     scraped_post_data: scrapedResult
       ? {
