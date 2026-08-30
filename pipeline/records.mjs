@@ -1,0 +1,46 @@
+import { validateFacebookUrl } from '../src/validation.js';
+import { enrichCotContacts } from '../src/cot-contacts.js';
+import { evaluateLeadFreshness } from '../src/freshness.js';
+
+export function searchLead(post) {
+  if (post?.schemaVersion !== 'facebook-search-posts-v1' || typeof post.post_id !== 'string'
+      || !/^[A-Za-z0-9_:-]{1,100}$/.test(post.post_id)) throw new Error('INVALID_SEARCH_POST_ID');
+  const url = validateFacebookUrl(post.url);
+  if (!url.ok || typeof post.author?.name !== 'string' || !post.author.name.trim()) throw new Error('MISSING_POST_URL_OR_AUTHOR');
+  return { 'Company Name': post.author.name.trim(), 'Lead Proof URL': url.value,
+    'Lead Statement': typeof post.message === 'string' ? post.message : '',
+    'Phone Number': '', 'Address 1': '', 'Post Code': '',
+    'Search Post ID': post.post_id,
+    'Search Posted At': typeof post.posted_at === 'string' ? post.posted_at : '',
+    'Search Query': typeof post.query === 'string' ? post.query : '',
+    'Search Identity Status': 'Candidate author name; business identity not yet verified' };
+}
+
+export function validateResponse(payload, expected) {
+  if (payload?.success !== true || payload.batchId !== expected.batchId
+      || !Array.isArray(payload.results) || payload.results.length !== expected.leads.length) throw new Error('BATCH_CONTRACT_MISMATCH');
+  return payload.results.map((r, i) => {
+    const e = expected.leads[i];
+    if (r?.success !== true || r.clientRowId !== e.clientRowId || r.rowIndex !== e.rowIndex
+        || !r.analysis || r.analysis.contact_enrichment?.schemaVersion !== 'cot-contact-enrichment-v1'
+        || !['GOOD','BAD','UNCLEAR'].includes(r.analysis.verdict)
+        || !r.lead || Object.keys(e.lead).some(k => e.lead[k] !== r.lead[k])) throw new Error('BATCH_CONTRACT_MISMATCH');
+    return r;
+  });
+}
+
+export function assess(row, now) {
+  const lead = { ...row.lead, fetchResults: row.fetchResults };
+  const contacts = enrichCotContacts(lead);
+  // Re-evaluate the real proof evidence. Neither search dates nor an AI verdict
+  // can promote an unproven timestamp to delivery-ready.
+  const freshness = evaluateLeadFreshness(lead, { now: new Date(now) });
+  const analysis = row.analysis;
+  const ready = analysis.verdict === 'GOOD' && analysis.needs_manual_review === false
+    && freshness.decision === 'fresh' && !freshness.requiresManualReview
+    && contacts.status === 'complete' && !contacts.requiresManualReview;
+  return { status: ready ? 'READY' : analysis.verdict === 'BAD' || freshness.autoRejectEligible ? 'REJECTED' : 'REVIEW_REQUIRED',
+    contacts, freshness, verdict: analysis.verdict,
+    reason: `${analysis.reasoning || ''} [Freshness: ${freshness.reasonCode}; contacts: ${contacts.status}]`,
+    validatedAt: new Date(now).toISOString(), response: row };
+}

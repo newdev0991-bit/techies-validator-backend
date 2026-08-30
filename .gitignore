@@ -30,3 +30,9 @@ coverage/
 # Optional: Build output (if added in future)
 dist/
 build/
+pipeline/config.json
+pipeline/data/
+pipeline/output/
+pipeline/.env
+pipeline/canary-data/
+pipeline/canary-output/

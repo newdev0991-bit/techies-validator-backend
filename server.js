@@ -21,6 +21,7 @@ import {
 } from './src/cot-batch.js';
 import { applyFreshnessPolicy, evaluateLeadFreshness } from './src/freshness.js';
 import { enrichCotContacts, cotLeadWithContacts } from './src/cot-contacts.js';
+import { pipelineAccess, pipelineActorOptions } from './src/pipeline-capabilities.js';
 import {
   InvalidProviderResponseError,
   isSuccessfulFacebookScrape,
@@ -91,6 +92,13 @@ app.get('/health', (_req, res) => res.json({
   provider: 'openai',
   cotBatchContract: process.env.APIFY_ACTOR_CONTRACT || 'cot-data-batch-v1',
   cotBatchSize: configuredCotBatchSize()
+}));
+
+app.get('/pipeline-capabilities', pipelineAccess, (_req, res) => res.json({
+  contactEnrichment: 'cot-contact-enrichment-v1',
+  batchContract: process.env.APIFY_ACTOR_CONTRACT || 'cot-data-batch-v1',
+  maxBatchSize: configuredCotBatchSize(),
+  actorMaxChargeUsd: pipelineActorOptions().maxTotalChargeUsd
 }));
 
 class PublicError extends Error {
@@ -541,7 +549,8 @@ async function runFacebookActorBatch(rows) {
     };
   });
 
-  const client = new ApifyClient({ token });
+  // Never automatically replay an Actor-start POST whose paid outcome is uncertain.
+  const client = new ApifyClient({ token, maxRetries: 0 });
   const actorId = process.env.APIFY_ACTOR_ID || 'J8wBqFJa8GQo9RJ5J';
   const activityWindowDays = parsePositiveNumber(process.env.COT_ACTIVITY_WINDOW_DAYS, 1, {
     min: 1,
@@ -560,7 +569,7 @@ async function runFacebookActorBatch(rows) {
   });
 
   console.log(`[facebook-actor-batch] Starting ${actorId} for ${entries.length} row(s).`);
-  const run = await client.actor(actorId).call(actorInput, { waitSecs });
+  const run = await client.actor(actorId).call(actorInput, { waitSecs, ...pipelineActorOptions() });
   const runStatus = typeof run?.status === 'string' ? run.status.toUpperCase() : '';
   if (['READY', 'RUNNING'].includes(runStatus)) {
     throw new PublicError(504, 'APIFY_TIMEOUT', 'Facebook batch timed out. Please retry the saved batch.');
@@ -813,6 +822,7 @@ async function fetchResultsHandler(req, res) {
 
 app.post('/fetch-results', fetchResultsHandler);
 app.post('/validate-batch', createCotBatchHandler());
+app.post('/pipeline/validate-batch', pipelineAccess, createCotBatchHandler());
 
 app.use((_req, res) => sendError(res, 404, 'NOT_FOUND', 'Endpoint not found.'));
 

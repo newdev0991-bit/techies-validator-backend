@@ -1,0 +1,31 @@
+{
+  "enabled": false,
+  "actorId": "53bGXKeIhVmNMTCi4",
+  "validatorBaseUrl": "https://techies-validator-backend-i71b.onrender.com",
+  "tickSeconds": 60,
+  "searchIntervalSeconds": 300,
+  "queries": ["opening soon", "new premises", "we are moving", "relocating", "under new management", "new owner"],
+  "searchInput": {
+    "maxResults": 40,
+    "recent_posts": true,
+    "location_uid": "112483542097587",
+    "usePeriodFilter": true,
+    "period": "last_24_hours",
+    "maxPages": 20,
+    "maxRequests": 40,
+    "pageSize": 10,
+    "maxRetries": 2,
+    "timeoutMs": 30000
+  },
+  "searchRun": {"timeout": 180, "memory": 512, "maxTotalChargeUsd": 0.1},
+  "maxSearchRunsPerDay": 288,
+  "maxValidationCallsPerDay": 40,
+  "maxValidationAttempts": 3,
+  "validationBatchSize": 3,
+  "validationTimeoutSeconds": 600,
+  "maxValidationActorChargeUsd": 0.2,
+  "maxDatasetItems": 1000,
+  "maxStoredLeads": 25000,
+  "dataDir": "./data",
+  "outputDir": "./output"
+}

@@ -1,0 +1,44 @@
+{
+  "enabled": false,
+  "maxSearchRunsTotal": 1,
+  "maxValidationCallsTotal": 1,
+  "actorId": "53bGXKeIhVmNMTCi4",
+  "validatorBaseUrl": "https://techies-validator-backend-i71b.onrender.com",
+  "tickSeconds": 60,
+  "searchIntervalSeconds": 300,
+  "queries": [
+    "opening soon",
+    "new premises",
+    "we are moving",
+    "relocating",
+    "under new management",
+    "new owner"
+  ],
+  "searchInput": {
+    "maxResults": 3,
+    "recent_posts": true,
+    "location_uid": "112483542097587",
+    "usePeriodFilter": true,
+    "period": "last_24_hours",
+    "maxPages": 3,
+    "maxRequests": 8,
+    "pageSize": 10,
+    "maxRetries": 2,
+    "timeoutMs": 30000
+  },
+  "searchRun": {
+    "timeout": 180,
+    "memory": 512,
+    "maxTotalChargeUsd": 0.1
+  },
+  "maxSearchRunsPerDay": 1,
+  "maxValidationCallsPerDay": 1,
+  "maxValidationAttempts": 3,
+  "validationBatchSize": 3,
+  "validationTimeoutSeconds": 600,
+  "maxValidationActorChargeUsd": 0.2,
+  "maxDatasetItems": 1000,
+  "maxStoredLeads": 25000,
+  "dataDir": "./canary-data",
+  "outputDir": "./canary-output"
+}

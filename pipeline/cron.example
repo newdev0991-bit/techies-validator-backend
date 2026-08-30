@@ -1,0 +1,3 @@
+# Single Linux host, Node >=24.2, persistent local disk. Replace paths.
+# Leave commented until paid activation is approved and preflight is verified.
+# * * * * * cd /srv/techies/backend && /usr/bin/node pipeline/cli.mjs tick >> /srv/techies/pipeline.log 2>&1
