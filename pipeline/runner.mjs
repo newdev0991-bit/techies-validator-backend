@@ -14,6 +14,7 @@ export class Runner {
     try {
       const result = await this.work();
       this.s.set('lastTick', { ...result, at: this.now() });
+      await this.s.flush?.();
       await exportFiles(this.s, this.c.outputDir, this.now());
       return result;
     } finally { this.s.release(); }
@@ -66,6 +67,7 @@ export class Runner {
     cycle={id:randomUUID(),phase:'starting',createdAt:now,input:{...c.searchInput,query:c.queries[queryIndex]},queryIndex};
     // Commit BEFORE the paid POST. If its outcome is lost, pause for reconciliation.
     s.transaction(()=>{s.charge(day,'searches');s.set('cycle',cycle);s.set('queryIndex',queryIndex+1);});
+    await s.flush?.(); // Cloud checkpoint must settle before any billed side effect.
     try {
       const run=await this.p.start(cycle.input);
       if (!run?.id || run.actId !== c.actorId) return this.halt('SEARCH_START_UNCERTAIN');
@@ -116,6 +118,7 @@ export class Runner {
     try { await this.p.preflight(); } catch (e) { return this.halt(safeCode(e)); }
     batch={...batch,phase:'sending',attempts:batch.attempts+1};
     s.transaction(()=>{s.charge(day,'validations');s.set('batch',batch);});
+    await s.flush?.();
     let response;
     try { response=await this.p.validate(batch.payload); }
     catch (e) {

@@ -130,6 +130,10 @@ Actor commit; leave recurring scheduling disabled until that canary passes.
 
 ## Schedule
 
+For the Apify-hosted controller and automatic frontend, use
+[cloud/README.md](../cloud/README.md). The following schedules are optional
+local alternatives; do not enable both local and cloud controllers.
+
 Windows (this workstation): `pipeline/install-task.ps1` prepares a Task
 Scheduler task **disabled**, with a one-minute trigger and IgnoreNew for
 overlaps. The script refuses to overwrite an existing task. It requires

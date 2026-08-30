@@ -1,0 +1,10 @@
+{
+  "actorSpecification": 1,
+  "name": "techies-cot-cloud-pipeline",
+  "title": "Techies COT Automatic Pipeline",
+  "description": "Scheduled keyword search, COT validation and verified contact results with durable checkpoints. No CSV upload required.",
+  "version": "0.1",
+  "buildTag": "latest",
+  "input": "./input_schema.json",
+  "dockerfile": "../cloud/Dockerfile"
+}

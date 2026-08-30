@@ -1,0 +1,10 @@
+**/node_modules
+**/.env*
+.git
+pipeline/data
+pipeline/output
+pipeline/canary-data
+pipeline/canary-output
+pipeline/config.json
+**/*.sqlite*
+**/*.log

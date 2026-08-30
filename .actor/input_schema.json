@@ -1,0 +1,10 @@
+{
+  "title": "Techies COT cloud controller",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "enabled": {"title":"Allow processing", "type":"boolean", "default":false,
+      "description":"Processing also requires the operator-managed CONFIG and PIPELINE_LIVE_ENABLED switch. Defaults to a no-provider-call status run."}
+  },
+  "required": []
+}

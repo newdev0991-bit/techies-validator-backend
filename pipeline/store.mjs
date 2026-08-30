@@ -57,4 +57,19 @@ export class Store {
   complete(id, result) { this.db.prepare("UPDATE leads SET status='complete',result=? WHERE id=?").run(JSON.stringify(result), id); }
   auditRun(cycle) { this.db.prepare('INSERT OR REPLACE INTO runs VALUES(?,?)').run(cycle.id, JSON.stringify(cycle)); }
   close() { this.db.close(); }
+  snapshot() {
+    return Object.fromEntries(['meta','leads','quarantine','runs','daily'].map(table =>
+      [table, this.db.prepare(`SELECT * FROM ${table} ORDER BY 1`).all()]));
+  }
+  restore(snapshot) {
+    if (['meta','leads','quarantine','runs','daily'].some(table => this.db.prepare(`SELECT count(*) AS n FROM ${table}`).get().n)) throw new Error('RESTORE_REQUIRES_EMPTY_STORE');
+    this.transaction(() => {
+      for (const table of ['meta','leads','quarantine','runs','daily']) {
+        if (!Array.isArray(snapshot[table])) throw new Error('INVALID_CLOUD_STATE');
+        const columns = this.db.prepare(`PRAGMA table_info(${table})`).all().map(r => r.name);
+        const insert = this.db.prepare(`INSERT INTO ${table} (${columns.join(',')}) VALUES (${columns.map(()=>'?').join(',')})`);
+        for (const row of snapshot[table]) insert.run(...columns.map(c => row[c] ?? null));
+      }
+    });
+  }
 }

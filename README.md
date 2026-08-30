@@ -4,6 +4,10 @@ Express backend for the Techies validator. The default workflow implements
 Card-data's business-activity rules and uses the private Apify Facebook actor for
 source evidence.
 
+The automatic COT workflow now has a separate [Apify cloud controller](cloud/README.md)
+with durable state, disabled schedule preparation, and a frontend saved-results
+connection. The standalone scripts in `pipeline/` remain an optional local mode.
+
 ## Card-data validation contract
 
 `POST /validate-business` accepts one lead at a time:

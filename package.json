@@ -12,6 +12,7 @@
     "dev": "node server.js",
     "test": "node --test test/*.test.js",
     "test:pipeline": "node --test pipeline/test/*.test.mjs",
+    "test:cloud": "node --test cloud/test/*.test.mjs",
     "pipeline:tick": "node pipeline/cli.mjs tick",
     "pipeline:plan": "node pipeline/cli.mjs plan"
   },
