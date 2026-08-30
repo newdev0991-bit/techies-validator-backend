@@ -90,3 +90,20 @@ test('COT prompt cannot borrow an unmatched page caption when exact proof is abs
   assert.doesNotMatch(prompt, /UNRELATED CAPTION/);
   assert.match(prompt, /Post Caption\/Text: Not provided/);
 });
+
+test('nonempty capped samples cannot prove a new page or lifetime volume', () => {
+  for (const size of [9, 10]) {
+    const lead = { fetchResults: { rawData: { activity: { recentPosts: Array.from({ length: size }, () => ({ text: 'An observed post' })) } } } };
+    const prompt = buildPrompt(lead);
+    assert.doesNotMatch(prompt, /< 20|> 50|50% weight|sparse post history/);
+    const constrained = constrainAnalysisToEvidence(normalizeAiResponse({ verdict: 'GOOD',
+      reasoning: 'The business is relocating. Sparse posting history indicates a new page.',
+      key_factors: ['New page with 9 posts', 'Explicit relocation'],
+      post_history_analysis: { page_maturity: 'new', total_posts: 9 }
+    }), lead);
+    assert.equal(constrained.post_history_analysis.total_posts, size);
+    assert.equal(constrained.post_history_analysis.page_maturity, 'unknown');
+    assert.doesNotMatch(constrained.reasoning, /indicates a new page/);
+    assert.deepEqual(constrained.key_factors, ['Explicit relocation']);
+  }
+});

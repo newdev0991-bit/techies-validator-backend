@@ -21,8 +21,8 @@ bounded searches do not guarantee exhaustive Facebook coverage.
 
 ## What is written
 
-- `output/enriched.csv`: GOOD, freshness-confirmed leads with both verified
-  phone and address, their evidence URLs, post ID and validation time.
+- `output/enriched.csv`: GOOD, freshness-confirmed leads with verified event
+  identity, phone and address, their evidence URLs, post ID and validation time.
 - `output/review.csv`: missing or conflicting evidence, unresolved identity,
   or uncertain COT/freshness decisions. No invented or AI-guessed contacts.
 - `output/rejected.csv`: BAD or deterministically stale leads.
@@ -34,12 +34,27 @@ bounded searches do not guarantee exhaustive Facebook coverage.
   restrict directory access and include it in backups.
 
 These are cumulative, regenerated snapshots, not append-only files. Freshness
-is rechecked at export time; stale leads leave `enriched.csv`. Each file is
+and business identity are rechecked at export time; stale or unresolved leads
+leave `enriched.csv`. Older model responses without the required search-author
+identity evidence stay in review. Each file is
 replaced atomically and status is written last, but the set of files is not a
 single atomic transaction. Copy after a completed tick for a consistent set.
 Source/audit records remain in SQLite. No records are posted to techiesdata.org.
 Import phone/post-ID CSV columns as **text** in spreadsheets to preserve zeros
 and long IDs. Values are formula-escaped, not executable Excel formulas.
+
+For search imports, a matched publisher page alone does not establish which
+business the event concerns. The backend requires an exact caption quote and
+matched publisher/business evidence for self-authored events; detected referrals
+cannot publish the publisher's contacts as the target business's contacts.
+Third-party businesses are not automatically resolved or scraped by handle.
+
+COT batches request `contactRequirements: "phone_address"`. Missing phone/address
+evidence can trigger the bounded official-site fallback even if email exists.
+Only an unambiguous named UK structured address is accepted from that fallback.
+Missing, ambiguous or inaccessible evidence stays blank. Existing callers that
+omit this option retain the any-contact policy. Per-field URLs refer to observed
+pages; COT no longer constructs unvisited Facebook About links.
 
 ## Limits and billing
 

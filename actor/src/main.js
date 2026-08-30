@@ -1,3 +1,4 @@
+import { normalizeGoogleEvidence, googleBusinessIdentityMatches, isAllowedGoogleContactUrl, readOfficialContacts, readStructuredAddresses, googleContactRequest, mergeGoogleContact } from './googleContacts.js';
 import { Actor } from 'apify';
 import { gotScraping } from 'got-scraping';
 import { toCotProofOutput } from './cotProof.js';
@@ -64,84 +65,6 @@ function safeIso(value) {
 }
 
 /** =================== Google official-site contact fallback =================== */
-const GOOGLE_CONTACT_EXCLUDED_HOSTS = [
-  'facebook.com', 'instagram.com', 'linkedin.com', 'x.com', 'twitter.com',
-  'yell.com', 'companieshouse.gov.uk', 'checkatrade.com', 'trustpilot.com',
-  'nextdoor.co.uk', 'houzz.co.uk', 'bark.com', 'mybuilder.com', '192.com',
-  'google.com', 'youtube.com'
-];
-
-function normalizeGoogleEvidence(value) {
-  return String(value || '')
-    .replace(/([a-z])([A-Z])/g, '$1 $2')
-    .replace(/([A-Z]{2})([A-Z][a-z])/g, '$1 $2')
-    .toLowerCase()
-    .normalize('NFKD')
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim();
-}
-
-function googleBusinessIdentityMatches(text, url, lead = {}) {
-  const normalizedText = normalizeGoogleEvidence(text);
-  const compactText = normalizedText.replace(/\s+/g, '');
-  const normalizedBusinessName = normalizeGoogleEvidence(lead.name || lead.Name);
-  const ignoredNameTokens = new Set(['and', 'the', 'ltd', 'limited', 'company', 'co', 'uk']);
-  const expectedNameTokens = normalizedBusinessName
-    .split(' ')
-    .filter((token) => token.length > 1 && !ignoredNameTokens.has(token));
-  const matchedNameTokens = expectedNameTokens.filter((token) => normalizedText.includes(token));
-  const nameScore = expectedNameTokens.length ? matchedNameTokens.length / expectedNameTokens.length : 0;
-  const expectedNamePhrase = expectedNameTokens.join(' ');
-  const compactExpectedName = expectedNameTokens.join('');
-  const phraseMatched = Boolean(
-    expectedNamePhrase && (
-      normalizedText.includes(expectedNamePhrase) ||
-      compactText.includes(compactExpectedName)
-    )
-  );
-
-  const postcode = String(lead.zip || lead.ZIP || lead.postcode || '').replace(/\s+/g, '').toLowerCase();
-  const ignoredLocationTokens = new Set([
-    'united', 'kingdom', 'england', 'scotland', 'wales', 'street', 'road', 'lane',
-    'high', 'gardens', 'garden', 'avenue', 'close', 'drive', 'park', 'industrial', 'estate'
-  ]);
-  const locationTokens = normalizeGoogleEvidence(lead.address || lead.Address)
-    .split(' ')
-    .filter((token) => token.length >= 4 && !ignoredLocationTokens.has(token));
-  const postcodeMatched = Boolean(postcode && compactText.includes(postcode));
-  const locationMatched = postcodeMatched || locationTokens.some((token) => normalizedText.includes(token));
-
-  let domainMatched = false;
-  try {
-    const host = new URL(url).hostname.replace(/^www\./, '');
-    const compactHost = normalizeGoogleEvidence(host).replace(/\s+/g, '');
-    domainMatched = compactExpectedName.length >= 6 && compactHost.includes(compactExpectedName);
-  } catch {}
-
-  const nameMatched = expectedNameTokens.length >= 2 && nameScore >= 0.8 && (phraseMatched || domainMatched);
-  return {
-    matched: nameMatched && (locationMatched || (!postcode && !locationTokens.length && domainMatched)),
-    confidence: nameMatched && (postcodeMatched || locationTokens.length > 1 || domainMatched) ? 'high' : 'medium',
-    nameScore,
-    phraseMatched,
-    domainMatched,
-    locationMatched,
-    postcodeMatched
-  };
-}
-
-function isAllowedGoogleContactUrl(value) {
-  try {
-    const url = new URL(value);
-    if (!/^https?:$/.test(url.protocol)) return false;
-    const host = url.hostname.toLowerCase().replace(/^www\./, '');
-    if (/(^|\.)google\.[a-z.]+$/i.test(host) || host.endsWith('.googleusercontent.com') || host.endsWith('.gstatic.com')) return false;
-    return !GOOGLE_CONTACT_EXCLUDED_HOSTS.some((blocked) => host === blocked || host.endsWith(`.${  blocked}`));
-  } catch {
-    return false;
-  }
-}
-
 function googleFallbackRemainingMs(deadline) {
   return Math.max(0, deadline - Date.now());
 }
@@ -184,6 +107,7 @@ async function readGoogleContactCandidate(url, deadline) {
 
   return {
     text: htmlToVisibleText(html).slice(0, 200000),
+    structuredAddresses: readStructuredAddresses(html),
     title: readHtmlTitle(html),
     url: finalUrl,
     mailto: anchors.find((anchor) => /^mailto:/i.test(anchor.href))?.href || '',
@@ -197,53 +121,6 @@ async function readGoogleContactCandidate(url, deadline) {
           return false;
         }
       })?.href || '',
-  };
-}
-
-function extractGoogleContact(candidate, lead, requested = {}) {
-  if (!isAllowedGoogleContactUrl(candidate.url)) return null;
-  const combinedText = [candidate.title, candidate.text].filter(Boolean).join('\n');
-  const identity = googleBusinessIdentityMatches(combinedText, candidate.url, lead);
-  if (!identity.matched) return null;
-
-  const emailPattern = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
-  const mailtoEmail = String(candidate.mailto || '')
-    .replace(/^mailto:/i, '')
-    .split(/[?;]/)[0]
-    .trim();
-  const bodyEmails = combinedText.match(emailPattern) || [];
-  const email = requested.email === false ? '' : (mailtoEmail || bodyEmails[0] || '');
-
-  const rawTelPhone = String(candidate.tel || '')
-    .replace(/^tel:/i, '')
-    .split(/[?;]/)[0]
-    .trim();
-  let telPhone = rawTelPhone;
-  try { telPhone = decodeURIComponent(rawTelPhone); } catch {}
-  telPhone = telPhone.replace(/^["'\s]+|["'\s]+$/g, '');
-  const bodyPhones = combinedText.match(/(?:\+44\s?|0)\d(?:[\d\s().-]{7,})/g) || [];
-  const isPlausiblePhone = (value) => {
-    const digits = String(value || '').replace(/\D/g, '');
-    return digits.length >= 10 && digits.length <= 14;
-  };
-  const verifiedTelPhone = isPlausiblePhone(telPhone) ? telPhone : '';
-  const verifiedBodyPhone = bodyPhones.map((value) => value.trim()).find(isPlausiblePhone) || '';
-  const phone = requested.phone === false ? '' : (verifiedTelPhone || verifiedBodyPhone);
-
-  if (!email && !phone) return null;
-  return {
-    phone,
-    phoneVerified: Boolean(phone),
-    phoneSource: phone ? (verifiedTelPhone ? 'google-official-website-tel' : 'google-official-website-labeled') : null,
-    email,
-    emailVerified: Boolean(email),
-    emailSource: email ? (mailtoEmail ? 'google-official-website-mailto' : 'google-official-website-labeled') : null,
-    website: candidate.url,
-    contactSource: 'google-official-website',
-    contactSourceUrl: candidate.url,
-    contactIdentityStatus: 'matched',
-    contactIdentityConfidence: identity.confidence,
-    googleIdentityEvidence: identity
   };
 }
 
@@ -395,29 +272,11 @@ async function getGoogleContactInfo(lead = {}, requested = {}, options = {}) {
             hasContactLink: Boolean(candidate.contactUrl),
             budgetRemainingMs: googleFallbackRemainingMs(deadline)
           });
-          let contact = extractGoogleContact(candidate, lead, requested);
+          const contact = await readOfficialContacts(candidate, lead, requested, {
+            readCandidate: url => readGoogleContactCandidate(url, deadline),
+            canRead: () => googleFallbackRemainingMs(deadline) >= 700,
+          });
           if (contact) return { ...contact, googleSearchQuery: activeQuery };
-
-          // The homepage may prove the business name/domain but keep the address only on Contact.
-          // Permit one Contact-page read only when the site itself is already a strong name match;
-          // extractGoogleContact still requires the combined page text to pass the full location/
-          // postcode identity test before accepting any phone/email.
-          const plausibleBusinessSite = homepageIdentity.nameScore >= 0.8 &&
-            (homepageIdentity.phraseMatched || homepageIdentity.domainMatched);
-          if (
-            plausibleBusinessSite &&
-            candidate.contactUrl &&
-            isAllowedGoogleContactUrl(candidate.contactUrl) &&
-            googleFallbackRemainingMs(deadline) >= 700
-          ) {
-            const contactPage = await readGoogleContactCandidate(candidate.contactUrl, deadline);
-            contact = extractGoogleContact(
-              { ...contactPage, text: `${candidate.text  }\n${  contactPage.text}` },
-              lead,
-              requested
-            );
-            if (contact) return { ...contact, googleSearchQuery: activeQuery };
-          }
         } catch (candidateError) {
           if (candidateError?.code === 'GOOGLE_FALLBACK_BUDGET') break;
           log('Google contact candidate skipped:', candidateError.message);
@@ -464,36 +323,15 @@ async function applyGoogleContactFallback(result, input, log = console.log) {
     log('Skipping Google fallback for an auth-blocked/error row');
     return;
   }
-  // A Google search is the most expensive thing a row can do - two SERP calls at $0.002 each,
-  // against roughly $0.002 for everything else a lead costs. It is therefore reserved for leads
-  // with no Facebook contact at all, rather than run whenever one of the two is missing: chasing a
-  // phone for a lead that already has an email tripled that lead's cost and, measured over the
-  // sample, mostly returned nothing.
-  if (input.includeGoogleFallback === false || result.phone || result.email) return;
+  const requested = googleContactRequest(result, input);
+  if (!requested) return;
   log('Searching Google for missing official business contacts...');
   const googleContact = await getGoogleContactInfo(
     input.lead || {},
-    { phone: !result.phone, email: !result.email },
+    requested,
     { budgetMs: input.googleFallbackBudgetMs || 45000, log }
   );
-  if (!result.phone && googleContact.phone) result.phone = googleContact.phone;
-  if (!result.email && googleContact.email) result.email = googleContact.email;
-  if (!result.website && googleContact.website) result.website = googleContact.website;
-  if (googleContact.phone) {
-    result.phoneVerified = googleContact.phoneVerified;
-    result.phoneSource = googleContact.phoneSource;
-  }
-  if (googleContact.email) {
-    result.emailVerified = googleContact.emailVerified;
-    result.emailSource = googleContact.emailSource;
-  }
-  for (const field of [
-    'contactSource', 'contactSourceUrl', 'contactIdentityStatus',
-    'contactIdentityConfidence', 'googleSearchQuery', 'googleIdentityEvidence',
-    'googleContactWarning'
-  ]) {
-    if (googleContact[field]) result[field] = googleContact[field];
-  }
+  mergeGoogleContact(result, googleContact);
 }
 
 function mergeRecentActivityEvidence(postCollections, maxResults) {
@@ -1160,7 +998,8 @@ async function processRequest(request, index) {
     const session = proof.session;
     if (!session && !proof.posts.length) throw new Error(proof.failureReason || 'proof-document-has-no-dated-story');
     result.pageId = session?.pageId || null;
-    result.pageUrl = canonicalizeFacebookUrl(derivePageUrlFromPostUrl(url) || url);
+    result.pageUrl = canonicalizeFacebookUrl(session?.pageUrl || derivePageUrlFromPostUrl(url) || url);
+    result.facebookEvidenceUrl = session?.pageUrl || null;
 
     if (session) applyPageEvidence(result, extractPageEvidence(session.html), scopedInput.lead);
     log('page evidence:', {

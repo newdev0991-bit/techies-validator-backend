@@ -1,6 +1,7 @@
 import { validateFacebookUrl } from '../src/validation.js';
 import { enrichCotContacts } from '../src/cot-contacts.js';
 import { evaluateLeadFreshness } from '../src/freshness.js';
+import { evaluateCotIdentity } from '../src/cot-identity.js';
 
 export function searchLead(post) {
   if (post?.schemaVersion !== 'facebook-search-posts-v1' || typeof post.post_id !== 'string'
@@ -31,16 +32,17 @@ export function validateResponse(payload, expected) {
 
 export function assess(row, now) {
   const lead = { ...row.lead, fetchResults: row.fetchResults };
-  const contacts = enrichCotContacts(lead);
+  const identity = evaluateCotIdentity(lead, row.analysis.business_identity);
+  const contacts = enrichCotContacts(lead, identity);
   // Re-evaluate the real proof evidence. Neither search dates nor an AI verdict
   // can promote an unproven timestamp to delivery-ready.
   const freshness = evaluateLeadFreshness(lead, { now: new Date(now) });
   const analysis = row.analysis;
   const ready = analysis.verdict === 'GOOD' && analysis.needs_manual_review === false
     && freshness.decision === 'fresh' && !freshness.requiresManualReview
-    && contacts.status === 'complete' && !contacts.requiresManualReview;
+    && contacts.status === 'complete' && !contacts.requiresManualReview && !identity.requiresManualReview;
   return { status: ready ? 'READY' : analysis.verdict === 'BAD' || freshness.autoRejectEligible ? 'REJECTED' : 'REVIEW_REQUIRED',
-    contacts, freshness, verdict: analysis.verdict,
-    reason: `${analysis.reasoning || ''} [Freshness: ${freshness.reasonCode}; contacts: ${contacts.status}]`,
+    contacts, freshness, identity, verdict: analysis.verdict,
+    reason: `${analysis.reasoning || ''} [Freshness: ${freshness.reasonCode}; contacts: ${contacts.status}; business identity: ${identity.status}]`,
     validatedAt: new Date(now).toISOString(), response: row };
 }

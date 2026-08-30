@@ -48,6 +48,14 @@
             "default": true,
             "description": "When Facebook has no verified contact details, search for an identity-matched official business website."
         },
+        "contactRequirements": {
+            "title": "Required contact evidence",
+            "type": "string",
+            "editor": "select",
+            "enum": ["any_contact", "phone_address"],
+            "default": "any_contact",
+            "description": "COT callers use phone_address to seek missing phone and structured address evidence even when email is available. Existing callers retain the any-contact fallback policy."
+        },
         "includePageDetails": {
             "title": "Extract page details",
             "type": "boolean",

@@ -103,6 +103,12 @@ export function normalizeAiResponse(value) {
     red_flags: stringArray(value.red_flags),
     opportunity_score: numberValue(value.opportunity_score),
     recommended_action: stringValue(value.recommended_action),
+    business_identity: {
+      relationship: ['self', 'third_party'].includes(value.business_identity?.relationship)
+        ? value.business_identity.relationship : 'unknown',
+      businessName: stringValue(value.business_identity?.businessName, '').slice(0, 200),
+      evidenceQuote: stringValue(value.business_identity?.evidenceQuote, '').slice(0, 500)
+    },
     caption_analysis: {
       has_opening_keywords: booleanValue(caption.has_opening_keywords),
       has_relocation_keywords: booleanValue(caption.has_relocation_keywords),

@@ -66,6 +66,7 @@ export function buildCotActorInput(entries, options = {}) {
     activityWindowDays: options.activityWindowDays || 1,
     maxPosts: options.maxPosts || 10,
     includeContactDetails: true,
+    contactRequirements: 'phone_address',
     includeGoogleFallback: options.includeGoogleFallback !== false,
     includePageDetails: true,
     includePreviousPosts: true

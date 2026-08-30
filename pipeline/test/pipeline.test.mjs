@@ -20,10 +20,12 @@ function response(payload,mutate=()=>{}) {
   return {success:true,batchId:payload.batchId,results:payload.leads.map(e=>{
     const url=e.lead['Lead Proof URL'];
     const raw={inputUrl:url,postUrl:url,status:'success',scrape:{success:true},business:{identityStatus:'matched'},
+      postText:'We are opening our new premises.',postAuthor:'Synthetic Example',
       posted_at_iso:'2026-08-30T11:00:00Z',time_target_matched:true,time_confidence:'high',time_target_match_method:'direct_post_url',time_precision:'exact',time_is_estimated:false,
       contact:{identityStatus:'matched',phone:'+44 1632 960123',phoneVerified:true,phoneSource:'facebook-page-page-text',sourceUrl:'https://www.facebook.com/example/about'},
       address:{full:'Synthetic premises London SW1A 1AA',verified:true,source:'facebook-page-contact',sourceUrl:'https://www.facebook.com/example/about'}};
-    const row={...e,success:true,fetchResults:{rawData:raw},analysis:{verdict:'GOOD',needs_manual_review:false,reasoning:'Synthetic business opening'}};
+    const row={...e,success:true,fetchResults:{rawData:raw},analysis:{verdict:'GOOD',needs_manual_review:false,reasoning:'Synthetic business opening',
+      business_identity:{relationship:'self',businessName:'Synthetic Example',evidenceQuote:raw.postText}}};
     mutate(row);row.analysis.contact_enrichment=enrichCotContacts({...row.lead,fetchResults:row.fetchResults});return row;
   })};
 }
@@ -129,6 +131,21 @@ test('provider start is single-shot, keeps tokens out of URL, sends bounded opti
     assert.equal(u.searchParams.get('restartOnError'),'false');assert.equal(u.searchParams.has('token'),false);
     assert.equal(options.headers.Authorization,'Bearer synthetic-token');throw new Error('network');}});
   await assert.rejects(()=>p.start({query:'test'}),{code:'PROVIDER_CONNECTION_UNCERTAIN'});assert.equal(calls,1);
+});
+
+test('old GOOD answers cannot export unresolved or third-party publishers even with complete contacts', async t => {
+  const f=fixture(t,[post('1'),post('2'),post('3')]);await ingest(f);
+  f.p.validate=async payload=>response(payload,r=>{
+    if(r.rowIndex===1) delete r.analysis.business_identity;
+    if(r.rowIndex===2) r.fetchResults.rawData.postText='Good luck to the new business opening nearby!';
+  });
+  await f.runner.tick();
+  const exported=await exportFiles(f.s,f.c.outputDir,f.now());
+  assert.deepEqual(exported.counts,{enriched:1,review:2,rejected:0});
+  const review=readFileSync(path.join(f.c.outputDir,'review.csv'),'utf8');
+  assert.match(review,/business identity: unresolved/);
+  assert.match(review,/business identity: third_party/);
+  assert.doesNotMatch(review,/01632960123/);
 });
 test('config caps, scheduler API access, and formula escaping fail closed',()=>{
   assert.throws(()=>validateConfig({...base,searchInput:{...base.searchInput,maxResults:0}}));

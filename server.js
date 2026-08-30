@@ -21,6 +21,7 @@ import {
 } from './src/cot-batch.js';
 import { applyFreshnessPolicy, evaluateLeadFreshness } from './src/freshness.js';
 import { enrichCotContacts, cotLeadWithContacts } from './src/cot-contacts.js';
+import { evaluateCotIdentity, applyCotIdentityPolicy } from './src/cot-identity.js';
 import { pipelineAccess, pipelineActorOptions } from './src/pipeline-capabilities.js';
 import {
   InvalidProviderResponseError,
@@ -182,6 +183,8 @@ EVIDENCE INTEGRITY RULES:
 - Missing or author-rejected history is NOT evidence of zero posts, a new page, inactivity, or an established business. Do not use it in verdict, scores, key factors, or red flags.
 - Do not calculate freshness or infer a post age. The backend reconciles timestamps independently after your response.
 - A proof URL or lead statement alone does not prove the age, identity, or history of a post.
+- The Company Name may be only a search-result author. A publisher discussing another business is not that business. Classify business_identity as self, third_party, or unknown. Supply the business name and a short exact quote from Post Caption/Text supporting that relationship. Do not infer a Facebook profile from a social handle. Unknown identity requires review.
+- Even a nonempty post sample cannot establish page age or lifetime volume. page_maturity MUST be "unknown"; do not call a page new or established from the number of supplied posts.
 
 VALIDATION CONTEXT:
 You're evaluating leads for a UK-based B2B service company. Good leads are:
@@ -199,9 +202,9 @@ SEMANTIC INDICATORS TO LOOK FOR IN POST CAPTION:
 - Business context: Must mention the business itself is new/moving, not just a product/service
 
 POSTING HISTORY ANALYSIS:
-- New business page: Few total posts (< 20), irregular posting, recently created
-- Established business: Many posts (> 50), regular posting history, consistent engagement
-- Unknown: Missing/empty history; avoid strong conclusions and mark as unknown in post history analysis
+- Read only the content of the supplied sample for explicit openings, relocations or ownership changes.
+- The sample is capped and may be filtered. Its size and apparent sparsity do not prove business age, page age, lifetime volume or inactivity.
+- Page maturity is unknown unless independently established; this response schema has no such independent evidence field, so always report unknown.
 
 Bad leads are:
 - Education sector (schools, academies, nurseries, tutoring centers, training centers)
@@ -220,21 +223,20 @@ MINOR UPDATES TO REJECT (Not new businesses):
 - Staff changes only: "new staff", "new team member" (unless combined with "new ownership")
 
 CRITICAL FACTORS TO CONSIDER:
-1. Caption Analysis (50% weight):
+1. Caption Analysis:
    - Does the post caption explicitly mention the BUSINESS is new/opening/relocating?
    - Is it just announcing a minor update (new product/menu/pricelist)?
    - Look for opening/relocation keywords vs. product update keywords
 
-2. Post History Analysis (50% weight):
-   - How many total previous posts exist?
-   - Is this a brand new page (< 20 posts) or established (> 50 posts)?
-   - Does posting pattern suggest new business or regular updates from existing business?
+2. Post History Analysis:
+   - Does the supplied content independently corroborate or contradict the specific business event?
+   - Do not infer lifetime totals or page maturity from a bounded sample.
 
 3. Combined Signal:
-   - GOOD: Opening keywords + sparse post history (new business)
-   - GOOD: Relocation keywords + established history (existing business moving)
-   - BAD: Product update keywords + established history (just a new menu item)
-   - BAD: Opening keywords + 100+ posts (likely false positive)
+   - GOOD: Explicit opening of the candidate business itself, with supporting business evidence
+   - GOOD: Explicit relocation of the candidate business itself
+   - BAD: Product-only or cosmetic update without a qualifying business event
+   - Third-party promotions cannot establish the candidate publisher as a new business
 
 4. Business Type: Does this business type typically need B2B services?
 5. Contact Info: Can they actually be reached for sales outreach?
@@ -247,17 +249,17 @@ EXAMPLE SCENARIOS:
 
 GOOD LEADS:
 - "Grand opening this Saturday! Come visit our new restaurant at 123 Main St"
-  + Caption: Opening keywords, Post history: 5 posts (new page) + GOOD
+  + Caption: Explicit opening of the business itself; page age unknown + GOOD
 
 - "We've relocated! Find us at our new premises on Oak Road"
-  + Caption: Relocation keywords, Post history: 80 posts (established) + GOOD
+  + Caption: Explicit relocation of the business itself; page age unknown + GOOD
 
 - "Under new management! The cafe has been taken over and we're excited to serve you"
   + Caption: New ownership keywords + GOOD
 
 BAD LEADS:
 - "Check out our new menu! Fresh items added this week"
-  + Caption: Product update, Post history: 200 posts + BAD
+  + Caption: Product update only + BAD
 
 - "New pricelist for 2024! Updated rates below"
   + Caption: Pricelist update + BAD
@@ -281,6 +283,11 @@ Analyze this lead carefully and provide your assessment in json format:
   "red_flags": ["Any concerns or negative indicators"],
   "opportunity_score": 75,
   "recommended_action": "Specific next step recommendation",
+  "business_identity": {
+    "relationship": "self" | "third_party" | "unknown",
+    "businessName": "Business the event actually concerns, or empty if unknown",
+    "evidenceQuote": "Exact short quote from Post Caption/Text, or empty if unknown"
+  },
   "caption_analysis": {
     "has_opening_keywords": true/false,
     "has_relocation_keywords": true/false,
@@ -290,9 +297,9 @@ Analyze this lead carefully and provide your assessment in json format:
   },
   "post_history_analysis": {
     "total_posts": ${postsCount},
-    "page_maturity": "new" | "established" | "unknown",
-    "posting_pattern": "Brief description of posting pattern if discernible",
-    "assessment": "Is this likely a new business page or existing business?"
+    "page_maturity": "unknown",
+    "posting_pattern": "Insufficient information",
+    "assessment": "Insufficient information"
   }
 }
 
@@ -307,27 +314,25 @@ export function constrainAnalysisToEvidence(aiResponse, lead) {
     evidence_status: history.evidenceStatus,
     count_scope: 'supplied_sample'
   };
-  if (history.totalPosts === null) {
-    constrainedHistory.page_maturity = 'unknown';
-    constrainedHistory.posting_pattern = 'Insufficient information';
-    constrainedHistory.assessment = 'Insufficient information';
-  }
+  constrainedHistory.page_maturity = 'unknown';
+  constrainedHistory.posting_pattern = 'Insufficient information';
+  constrainedHistory.assessment = 'Insufficient information';
   return {
     ...aiResponse,
-    ...(history.totalPosts === null ? removeUnsupportedHistoryClaims(aiResponse) : {}),
+    ...removeUnsupportedHistoryClaims(aiResponse, history.totalPosts !== null),
     post_history_analysis: constrainedHistory
   };
 }
 
-// The model sometimes ignores the missing-history rule in prose even when its
+// The model sometimes ignores the bounded-history rule in prose even when its
 // structured field is corrected. Remove those unsupported narrative/factor
 // claims too; never turn extraction failure into evidence of a young business.
-function removeUnsupportedHistoryClaims(analysis) {
+function removeUnsupportedHistoryClaims(analysis, hasSample = false) {
   const historyClaim = /\b(?:post(?:ing)?\s+(?:history|pattern|count)|previous posts|total posts|(?:0|zero|no)\s+(?:(?:previous|total)\s+)?posts|page(?:'s)?\s+maturity|(?:new|established|old|inactive)\s+(?:business\s+)?page|absence of (?:previous )?posts|(?:lack|absence) of (?:an? )?established (?:presence|posting history))\b/i;
   const clean = value => String(value || '').split(/(?<=[.!?])\s+/)
     .filter(sentence => !historyClaim.test(sentence)).join(' ').trim();
   return {
-    reasoning: `${clean(analysis.reasoning)} Posting history was not verified and cannot establish business age or activity.`.trim(),
+    reasoning: `${clean(analysis.reasoning)} ${hasSample ? 'A bounded post sample cannot establish page maturity or lifetime post volume.' : 'Posting history was not verified and cannot establish business age or activity.'}`.trim(),
     key_factors: (analysis.key_factors || []).filter(value => !historyClaim.test(value)),
     red_flags: (analysis.red_flags || []).filter(value => !historyClaim.test(value)),
     recommended_action: clean(analysis.recommended_action) || 'Review the available proof evidence.',
@@ -413,12 +418,14 @@ async function analyzeLead(lead) {
   const freshnessData = evaluateLeadFreshness(lead, {
     leadDateOrder: configuredLeadDateOrder()
   });
-  const policyResponse = applyFreshnessPolicy(aiResponse, freshnessData);
+  const businessIdentity = evaluateCotIdentity(lead, aiResponse.business_identity);
+  const finalContacts = enrichCotContacts(lead, businessIdentity);
+  const policyResponse = applyCotIdentityPolicy(applyFreshnessPolicy(aiResponse, freshnessData), businessIdentity);
 
   const scrapedResult = lead?.fetchResults?.rawData || lead?.fetchResults || null;
   return {
     ...policyResponse,
-    contact_enrichment: contactEnrichment,
+    contact_enrichment: finalContacts,
     freshness: freshnessData,
     scraped_post_data: scrapedResult
       ? {
@@ -429,7 +436,7 @@ async function analyzeLead(lead) {
       : null,
     apify_scraping_success: isSuccessfulFacebookScrape(scrapedResult),
     posted_at: freshnessData.timestamp,
-    needs_manual_review: freshnessData.requiresManualReview
+    needs_manual_review: freshnessData.requiresManualReview || businessIdentity.requiresManualReview || finalContacts.requiresManualReview
   };
 }
 

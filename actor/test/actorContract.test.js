@@ -206,14 +206,13 @@ test('rows finish out of order but reach the dataset in input order', async () =
     assert.equal(source.match(/Actor\.pushData\(/g).length, 1);
 });
 
-test('a Google search runs only for leads with no Facebook contact at all', async () => {
+test('Google fallback uses explicit contact requirements after terminal-row checks', async () => {
     const source = await readMain();
     const fallbackStart = source.indexOf('async function applyGoogleContactFallback');
     const fallback = source.slice(fallbackStart, source.indexOf('function mergeRecentActivityEvidence', fallbackStart));
 
-    // Two SERP calls cost roughly twice what the rest of a lead costs, so having either contact
-    // already is enough to skip the search.
-    assert.match(fallback, /input\.includeGoogleFallback === false \|\| result\.phone \|\| result\.email/);
+    assert.ok(fallback.indexOf('if (terminalRow)') < fallback.indexOf('googleContactRequest(result, input)'));
+    assert.match(fallback, /if \(!requested\) return/);
 });
 
 test('a name-only search with no candidate host does not pay for the follow-up query', async () => {

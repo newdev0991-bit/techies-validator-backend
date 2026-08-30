@@ -69,3 +69,14 @@ test('invalid phones and unsafe source URLs remain blank', () => {
   const lead = fixture(); lead.fetchResults.rawData.contact.sourceUrl = 'javascript:alert(1)';
   assert.equal(enrichCotContacts(lead).phone.value, '');
 });
+
+test('matched official structured addresses are accepted with independent field provenance', () => {
+  const lead = fixture(), raw = lead.fetchResults.rawData;
+  raw.address.source = 'google-official-website-structured';
+  raw.address.identityStatus = 'matched';
+  raw.address.sourceUrl = 'https://syntheticexample.test/contact';
+  assert.equal(enrichCotContacts(lead).status, 'complete');
+  assert.equal(enrichCotContacts(lead).address.sourceUrl, raw.address.sourceUrl);
+  raw.address.identityStatus = 'unconfirmed';
+  assert.equal(enrichCotContacts(lead).address.value, '');
+});

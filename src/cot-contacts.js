@@ -28,7 +28,7 @@ function field(value, submitted, source, url, normalize = v => text(v).toLowerCa
 
 // Values come only from the Actor's identity-checked evidence, never model text,
 // OCR guesses, or submitted fields echoed back as if they had been scraped.
-export function enrichCotContacts(lead = {}) {
+export function enrichCotContacts(lead = {}, businessIdentity) {
   const submitted = normalizeLead(lead);
   const raw = lead.fetchResults?.rawData || lead.fetchResults?.actorData || lead.fetchResults || {};
   const proof = validateFacebookUrl(submitted.link);
@@ -38,7 +38,7 @@ export function enrichCotContacts(lead = {}) {
   const address = raw.address || {};
   const usable = sameRow && isSuccessfulFacebookScrape(raw)
     && !raw.scrape?.blocked && !raw.scrape?.loginRequired && !raw.scrape?.notFound
-    && !raw.business?.wrongBusiness;
+    && !raw.business?.wrongBusiness && !businessIdentity?.requiresManualReview;
   const phoneUrl = sourceUrl(contact.sourceUrl);
   const phoneSource = text(contact.phoneSource);
   const phoneAllowed = usable && contact.identityStatus === 'matched'
@@ -49,8 +49,9 @@ export function enrichCotContacts(lead = {}) {
     submitted.phone, phoneSource, phoneUrl, normalizeUkContactPhone);
   const addressUrl = sourceUrl(address.sourceUrl);
   const addressAllowed = usable && raw.business?.identityStatus === 'matched'
-    && address.verified === true && address.source === 'facebook-page-contact'
-    && validateFacebookUrl(addressUrl).ok;
+    && address.verified === true &&
+    ((address.source === 'facebook-page-contact' && validateFacebookUrl(addressUrl).ok) ||
+     (address.source === 'google-official-website-structured' && address.identityStatus === 'matched' && addressUrl));
   const fullAddress = field(addressAllowed ? text(address.full) : '',
     submitted.address, text(address.source), addressUrl);
   // Derive a postcode only from the observed address, never a submitted fallback.
@@ -67,6 +68,7 @@ export function enrichCotContacts(lead = {}) {
     phone, address: fullAddress, postcode: postcodeField,
     requiresManualReview: conflicts || !complete,
     warnings: [
+      ...(businessIdentity?.requiresManualReview ? [businessIdentity.reason] : []),
       ...(!sameRow ? ['Contact evidence is missing or belongs to a different proof URL.'] : []),
       ...(!phone.value ? ['No verified UK business phone was found.'] : []),
       ...(!fullAddress.value ? ['No verified business address was found.'] : []),

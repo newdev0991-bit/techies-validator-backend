@@ -44,6 +44,7 @@ test('builds and validates the Actor requestKey contract without trusting datase
     lead: row.lead
   }));
   const input = buildCotActorInput(entries);
+  assert.equal(input.contactRequirements, 'phone_address');
   assert.equal(Object.hasOwn(input, 'cookies'), false);
   assert.deepEqual(input.requests.map((entry) => entry.requestKey), ['run-1:0', 'run-1:1']);
 
