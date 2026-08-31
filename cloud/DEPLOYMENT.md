@@ -66,5 +66,25 @@ The schedule was paused during diagnosis; its five-minute interval is retained.
 The source repair adds a terminal Console status message naming the disabled
 gates, an HTML output report with cumulative counts and lifetime allowances,
 and an explicit output schema plus controller-specific README. It preserves
-all three gates, spending limits, and state history. This repair needs a new
-approved Actor build before it is live; build 0.0.2 remains the tested runtime.
+all three gates, spending limits, and state history.
+
+Approved repair deployment verified:
+- Build `0.0.3`, ID `b5NIKTPdHlmMmDhHd`, succeeded from exact feature-branch
+  commit `970d0dccb3116f17c6a3132d2a38a24a869b7979`. All 14 cloud tests passed
+  inside the image; output schema and cloud/README.md were loaded correctly.
+- One status-only run `j3zlf4SjFLlnbYLbl` succeeded in 3.564 seconds with limited
+  permissions, input enabled=false, 512 MB, 180 seconds, restart off, $0.05 cap.
+  The run's terminal Console message names all three disabled gates instead of
+  generic success. The Output tab displays Pipeline report and Status JSON.
+- The report shows 3 cumulative saved leads (0 ready, 2 review, 1 rejected),
+  and 1/1 used for both lifetime search and validation allowances. Lead,
+  quarantine, run-history, and daily-counter chunk hashes were compared before
+  and after the test and are unchanged. No new search or validation occurred.
+- Console charges rounded to $0.002 for the build and $0.000 for the test,
+  below the explicitly approved $0.10 total budget.
+- Cron remains disabled with the five-minute interval preserved. Main and
+  production were unchanged. Live collection still needs a separate approved
+  allowance and the outstanding backend release checks.
+
+This checkpoint-only update follows the verified runtime commit above and
+does not require another build or run.
