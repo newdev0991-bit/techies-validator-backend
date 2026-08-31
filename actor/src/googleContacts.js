@@ -1,3 +1,5 @@
+import { normalizeUkContactPhone } from './contactValues.js';
+
 const GOOGLE_CONTACT_EXCLUDED_HOSTS = [
   'facebook.com', 'instagram.com', 'linkedin.com', 'x.com', 'twitter.com',
   'yell.com', 'companieshouse.gov.uk', 'checkatrade.com', 'trustpilot.com',
@@ -11,6 +13,7 @@ export function normalizeGoogleEvidence(value) {
     .replace(/([A-Z]{2})([A-Z][a-z])/g, '$1 $2')
     .toLowerCase()
     .normalize('NFKD')
+    .replace(/['’](?=[a-z])/g, '')
     .replace(/[^a-z0-9]+/g, ' ')
     .trim();
 }
@@ -43,7 +46,7 @@ export function googleBusinessIdentityMatches(text, url, lead = {}) {
     .split(' ')
     .filter((token) => token.length >= 4 && !ignoredLocationTokens.has(token));
   const postcodeMatched = Boolean(postcode && compactText.includes(postcode));
-  const locationMatched = postcodeMatched || locationTokens.some((token) => normalizedText.includes(token));
+  const locationMatched = postcode ? postcodeMatched : locationTokens.some((token) => normalizedText.includes(token));
 
   let domainMatched = false;
   try {
@@ -52,9 +55,12 @@ export function googleBusinessIdentityMatches(text, url, lead = {}) {
     domainMatched = compactExpectedName.length >= 6 && compactHost.includes(compactExpectedName);
   } catch { /* Invalid URLs cannot establish a domain match. */ }
 
-  const nameMatched = expectedNameTokens.length >= 2 && nameScore >= 0.8 && (phraseMatched || domainMatched);
+  let linkedWebsite = false;
+  try { linkedWebsite = Boolean(lead.officialWebsite && new URL(lead.officialWebsite).hostname.replace(/^www\./, '') === new URL(url).hostname.replace(/^www\./, '')); } catch {}
+  const nameMatched = (expectedNameTokens.length >= 2 || (linkedWebsite && expectedNameTokens.join('').length >= 4))
+    && nameScore >= 0.8 && (phraseMatched || domainMatched);
   return {
-    matched: nameMatched && (locationMatched || (!postcode && !locationTokens.length && domainMatched)),
+    matched: nameMatched && (locationMatched || (!lead.requireLocation && !postcode && !locationTokens.length && (domainMatched || linkedWebsite))),
     confidence: nameMatched && (postcodeMatched || locationTokens.length > 1 || domainMatched) ? 'high' : 'medium',
     nameScore,
     phraseMatched,
@@ -67,8 +73,9 @@ export function googleBusinessIdentityMatches(text, url, lead = {}) {
 export function isAllowedGoogleContactUrl(value) {
   try {
     const url = new URL(value);
-    if (!/^https?:$/.test(url.protocol)) return false;
+    if (!/^https?:$/.test(url.protocol) || url.username || url.password || (url.port && !['80', '443'].includes(url.port))) return false;
     const host = url.hostname.toLowerCase().replace(/^www\./, '');
+    if (!host.includes('.') || /^(?:localhost|127\.|10\.|192\.168\.|169\.254\.|0\.|\[)/.test(host) || /(?:^|\.)(?:local|internal|localhost)$/.test(host)) return false;
     if (/(^|\.)google\.[a-z.]+$/i.test(host) || host.endsWith('.googleusercontent.com') || host.endsWith('.gstatic.com')) return false;
     return !GOOGLE_CONTACT_EXCLUDED_HOSTS.some((blocked) => host === blocked || host.endsWith(`.${  blocked}`));
   } catch {
@@ -100,6 +107,7 @@ export function extractGoogleContact(candidate, lead, requested = {}) {
   telPhone = telPhone.replace(/^["'\s]+|["'\s]+$/g, '');
   const bodyPhones = combinedText.match(/(?:\+44\s?|0)\d(?:[\d\s().-]{7,})/g) || [];
   const isPlausiblePhone = (value) => {
+    if (requested.email === false) return Boolean(normalizeUkContactPhone(value));
     const digits = String(value || '').replace(/\D/g, '');
     return digits.length >= 10 && digits.length <= 14;
   };
@@ -107,7 +115,9 @@ export function extractGoogleContact(candidate, lead, requested = {}) {
   const verifiedBodyPhone = bodyPhones.map((value) => value.trim()).find(isPlausiblePhone) || '';
   const phone = requested.phone === false ? '' : (verifiedTelPhone || verifiedBodyPhone);
 
-  const address = requested.address ? matchedStructuredAddress(candidate.structuredAddresses, lead) : '';
+  const structuredAddress = requested.address ? matchedStructuredAddress(candidate.structuredAddresses, lead) : '';
+  const labeledAddress = requested.address && !structuredAddress ? matchedLabeledAddress(candidate.labeledAddresses, lead) : '';
+  const address = structuredAddress || labeledAddress;
   if (!email && !phone && !address) return null;
   const phoneSource = verifiedTelPhone ? 'google-official-website-tel' : 'google-official-website-labeled';
   const emailSource = mailtoEmail ? 'google-official-website-mailto' : 'google-official-website-labeled';
@@ -118,7 +128,7 @@ export function extractGoogleContact(candidate, lead, requested = {}) {
     phoneSourceUrl: phone ? candidate.url : null,
     address,
     addressVerified: Boolean(address),
-    addressSource: address ? 'google-official-website-structured' : null,
+    addressSource: address ? (structuredAddress ? 'google-official-website-structured' : 'google-official-website-address') : null,
     addressSourceUrl: address ? candidate.url : null,
     addressIdentityStatus: address ? 'matched' : 'unconfirmed',
     email,
@@ -186,9 +196,9 @@ function matchedStructuredAddress(addresses = [], lead = {}) {
   return unique.length === 1 ? unique[0] : '';
 }
 
-function requestedComplete(contact, requested) {
+export function requestedComplete(contact, requested) {
   if (!contact) return false;
-  if (!requested.address) return Boolean(contact.phone || contact.email);
+  if (!requested.address) return requested.phone ? Boolean(contact.phone) : Boolean(contact.phone || contact.email);
   return (!requested.phone || Boolean(contact.phone)) && Boolean(contact.address);
 }
 
@@ -229,4 +239,33 @@ export async function readOfficialContacts(candidate, lead, requested, { readCan
   } catch {
     return contact; // A failed follow-up must not erase already-observed evidence.
   }
+}
+
+// Actual address blocks and compact street/postcode lines, not model guesses or
+// postcode-only snippets. Registered-office/legal addresses are not trading premises.
+export function readLabeledAddresses(html, visibleText) {
+  const values = [];
+  const clean = value => String(value).replace(/<[^>]*>/g, ' ').replace(/&nbsp;|&#160;/g, ' ').replace(/\s+/g, ' ').trim();
+  for (const match of String(html).matchAll(/<address\b[^>]*>([\s\S]{1,700}?)<\/address>/gi)) values.push(clean(match[1]));
+  const lines = String(visibleText || '').split('\n').map(clean).filter(Boolean);
+  for (let i = 0; i < lines.length; i++) {
+    if (!/\b(?:GIR\s?0AA|[A-Z]{1,2}\d[A-Z\d]?\s?\d[A-Z]{2})\b/i.test(lines[i])) continue;
+    if (/\b(?:street|road|lane|avenue|drive|close|way|place|court|square|parade|terrace|st|rd|ave)\b/i.test(lines[i])) values.push(lines[i]);
+    else {
+      const start = Math.max(0, i - 4);
+      const block = lines.slice(start, i + 1);
+      const label = block.findIndex(line => /^(?:our )?(?:address|find us|visit us|location)\s*:?$/i.test(line));
+      if (label >= 0) values.push(block.slice(label + 1).join(', '));
+    }
+  }
+  return [...new Set(values)].filter(value => value.length >= 12 && value.length <= 220 &&
+    !/registered office|company number|copyright|https?:|@/i.test(value) &&
+    /\b(?:street|road|lane|avenue|drive|close|way|place|court|square|parade|terrace|st|rd|ave)\b/i.test(value) &&
+    /\b(?:GIR\s?0AA|[A-Z]{1,2}\d[A-Z\d]?\s?\d[A-Z]{2})\b/i.test(value));
+}
+
+function matchedLabeledAddress(addresses = [], lead = {}) {
+  const postcode = postcodeKey(lead.zip || lead.ZIP || lead.postcode);
+  const matches = [...new Set(addresses.filter(a => !postcode || postcodeKey(a).includes(postcode)))];
+  return matches.length === 1 ? matches[0] : '';
 }

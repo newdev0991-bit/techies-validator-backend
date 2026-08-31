@@ -130,6 +130,7 @@ export async function openFacebookPageSession(
     pageUrl,
     { newProxyUrl = null, maxAttempts = DEFAULT_MAX_ATTEMPTS, timeoutMs = 60000, log = () => {} } = {},
 ) {
+    if (!facebookUrl(pageUrl)) return { failureReason: 'invalid-facebook-page-url' };
     const result = await withProxyRetries(
         async (proxyUrl) => {
             const response = await gotScraping({
@@ -137,6 +138,10 @@ export async function openFacebookPageSession(
                 headers: DOCUMENT_HEADERS,
                 proxyUrl: proxyUrl || undefined,
                 followRedirect: true,
+                maxRedirects: 3,
+                hooks: { beforeRedirect: [(options) => {
+                    if (!facebookUrl(String(options.url))) throw new Error('unsafe-page-redirect');
+                }] },
                 throwHttpErrors: false,
                 timeout: { request: timeoutMs },
             });

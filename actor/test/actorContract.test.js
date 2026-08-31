@@ -215,8 +215,8 @@ test('Google fallback uses explicit contact requirements after terminal-row chec
     assert.match(fallback, /if \(!requested\) return/);
 });
 
-test('a name-only search with no candidate host does not pay for the follow-up query', async () => {
+test('legacy name-only search without a candidate still skips the follow-up; strict COT may continue', async () => {
     const source = await readMain();
 
-    assert.match(source, /if \(queryIndex === 0 && !uniqueCandidates\.length\) \{/);
+    assert.match(source, /if \(queryIndex === 0 && !uniqueCandidates\.length && !options\.strictContacts\) \{/);
 });

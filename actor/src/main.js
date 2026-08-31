@@ -1,4 +1,8 @@
-import { normalizeGoogleEvidence, googleBusinessIdentityMatches, isAllowedGoogleContactUrl, readOfficialContacts, readStructuredAddresses, googleContactRequest, mergeGoogleContact } from './googleContacts.js';
+import { normalizeGoogleEvidence, googleBusinessIdentityMatches, isAllowedGoogleContactUrl, readOfficialContacts, readStructuredAddresses, readLabeledAddresses, requestedComplete, googleContactRequest, mergeGoogleContact } from './googleContacts.js';
+import { assertPublicContactUrl, publicContactLookup } from './publicContactUrl.js';
+import { scrapeCotTargetContacts } from './cotContactScraper.js';
+import { openFacebookPageSession } from './facebookHttpClient.js';
+import { facebookContactRoot } from './facebookContacts.js';
 import { Actor } from 'apify';
 import { gotScraping } from 'got-scraping';
 import { toCotProofOutput } from './cotProof.js';
@@ -83,12 +87,17 @@ function googleFallbackBudgetError() {
  * remaining budget, and an HTTP read is finished as soon as the body is in hand.
  */
 async function readGoogleContactCandidate(url, deadline) {
+  assertPublicContactUrl(url);
   const remainingBeforeRequest = googleFallbackRemainingMs(deadline);
   if (remainingBeforeRequest < 500) throw googleFallbackBudgetError();
 
   const response = await gotScraping({
     url,
     followRedirect: true,
+    maxRedirects: 3,
+    retry: { limit: 0 },
+    dnsLookup: publicContactLookup,
+    hooks: { beforeRedirect: [options => { assertPublicContactUrl(String(options.url)); }] },
     throwHttpErrors: false,
     timeout: { request: Math.max(500, Math.min(5500, remainingBeforeRequest - 200)) },
   });
@@ -108,13 +117,14 @@ async function readGoogleContactCandidate(url, deadline) {
   return {
     text: htmlToVisibleText(html).slice(0, 200000),
     structuredAddresses: readStructuredAddresses(html),
+    labeledAddresses: readLabeledAddresses(html, htmlToVisibleText(html)),
     title: readHtmlTitle(html),
     url: finalUrl,
     mailto: anchors.find((anchor) => /^mailto:/i.test(anchor.href))?.href || '',
     tel: anchors.find((anchor) => /^tel:/i.test(anchor.href))?.href || '',
     contactUrl:
       anchors.find((anchor) => {
-        if (!/\b(contact|contact us|get in touch)\b/i.test(anchor.text)) return false;
+        if (!/\b(contact|contact us|get in touch|find us|visit us|location)\b/i.test(anchor.text)) return false;
         try {
           return new URL(anchor.href).hostname === hostname;
         } catch {
@@ -142,7 +152,7 @@ async function getGoogleContactInfo(lead = {}, requested = {}, options = {}) {
     .filter((token) => token.length >= 4 && !ignoredLocationTokens.has(token));
   const locationHint = locationTokens.at(-1) || rawPostcode;
   const country = normalizeGoogleEvidence(lead.country || lead.Country);
-  const domainFilter = /(^| )(united kingdom|uk|england|scotland|wales)( |$)/.test(country)
+  const domainFilter = options.strictContacts ? '' : /(^| )(united kingdom|uk|england|scotland|wales)( |$)/.test(country)
     ? ' site:co.uk'
     : '';
 
@@ -154,6 +164,7 @@ async function getGoogleContactInfo(lead = {}, requested = {}, options = {}) {
     `"${  businessName  }"${  locationHint ? ` ${  locationHint}` : ''  }${domainFilter}`
   ])];
 
+  let partialContact = null;
   try {
     const proxyConfiguration = await Actor.createProxyConfiguration({ groups: ['GOOGLE_SERP'] });
     const proxyUrl = await proxyConfiguration.newUrl();
@@ -195,6 +206,15 @@ async function getGoogleContactInfo(lead = {}, requested = {}, options = {}) {
           }
         })
         .filter(Boolean);
+      if (options.readFacebookCandidate) {
+        const pages = [...new Set(candidates.map(facebookContactRoot).filter(Boolean))].slice(0, 2);
+        for (const url of pages) {
+          if (googleFallbackRemainingMs(deadline) < 1000) break;
+          const contact = await options.readFacebookCandidate(url, deadline);
+          if (requestedComplete(contact, requested)) return { ...contact, googleSearchQuery: activeQuery };
+          if (contact && !partialContact) partialContact = contact;
+        }
+      }
       const businessTokens = normalizeGoogleEvidence(businessName)
         .split(' ')
         .filter((token) => token.length > 2 && !['and', 'the', 'ltd', 'limited', 'company'].includes(token));
@@ -276,7 +296,8 @@ async function getGoogleContactInfo(lead = {}, requested = {}, options = {}) {
             readCandidate: url => readGoogleContactCandidate(url, deadline),
             canRead: () => googleFallbackRemainingMs(deadline) >= 700,
           });
-          if (contact) return { ...contact, googleSearchQuery: activeQuery };
+          if (requestedComplete(contact, requested)) return { ...contact, googleSearchQuery: activeQuery };
+          if (contact && !partialContact) partialContact = { ...contact, googleSearchQuery: activeQuery };
         } catch (candidateError) {
           if (candidateError?.code === 'GOOGLE_FALLBACK_BUDGET') break;
           log('Google contact candidate skipped:', candidateError.message);
@@ -287,7 +308,7 @@ async function getGoogleContactInfo(lead = {}, requested = {}, options = {}) {
       // one is paying another SERP to look at a different slice of the same absent website. It buys
       // some recall - the two queries do return different results - but not enough to be the
       // default when it doubles the row's search cost.
-      if (queryIndex === 0 && !uniqueCandidates.length) {
+      if (queryIndex === 0 && !uniqueCandidates.length && !options.strictContacts) {
         log('No candidate host from the name-only search; skipping the location-qualified follow-up');
         break;
       }
@@ -296,6 +317,7 @@ async function getGoogleContactInfo(lead = {}, requested = {}, options = {}) {
 
     const timedOut = googleFallbackRemainingMs(deadline) < 500;
     return {
+      ...partialContact,
       googleSearchQuery: searchQueries.join(' || '),
       googleContactWarning: timedOut
         ? `Google fallback stopped at ${budgetMs}ms budget`
@@ -304,6 +326,7 @@ async function getGoogleContactInfo(lead = {}, requested = {}, options = {}) {
   } catch (error) {
     log('Google search failed safely:', error.message);
     return {
+      ...partialContact,
       googleSearchQuery: searchQueries.join(' || '),
       googleContactWarning: error?.code === 'GOOGLE_FALLBACK_BUDGET'
         ? `Google fallback stopped at ${budgetMs}ms budget`
@@ -312,7 +335,7 @@ async function getGoogleContactInfo(lead = {}, requested = {}, options = {}) {
   }
 }
 
-async function applyGoogleContactFallback(result, input, log = console.log) {
+async function applyGoogleContactFallback(result, input, log = console.log, options = {}) {
   const terminalErrorText = String(result.error || result.contactError || '');
   const terminalRow =
     result.status === 'error' ||
@@ -323,16 +346,36 @@ async function applyGoogleContactFallback(result, input, log = console.log) {
     log('Skipping Google fallback for an auth-blocked/error row');
     return;
   }
-  const requested = googleContactRequest(result, input);
+  let requested = googleContactRequest(result, input);
   if (!requested) return;
+  const deadline = Date.now() + Math.min(30000, input.googleFallbackBudgetMs || 30000);
+  const lead = { ...(input.lead || {}) };
+  // A page-linked official site is a stronger and cheaper starting point than
+  // search. Never replace it with a guessed .co.uk domain.
+  if (result.website && (result.identityStatus === 'matched' || result.contactIdentityStatus === 'matched')) {
+    const url = /^https?:\/\//i.test(result.website) ? result.website : `https://${result.website}`;
+    try {
+      lead.officialWebsite = assertPublicContactUrl(url).href;
+      const site = await readGoogleContactCandidate(lead.officialWebsite, deadline);
+      const contact = await readOfficialContacts(site, lead, requested, {
+        readCandidate: value => readGoogleContactCandidate(value, deadline),
+        canRead: () => googleFallbackRemainingMs(deadline) >= 700,
+      });
+      if (contact) mergeGoogleContact(result, contact);
+      if (requestedComplete(contact, requested)) return;
+    } catch { log('Linked official website unavailable; continuing bounded contact lookup'); }
+  }
+  if (googleFallbackRemainingMs(deadline) < 5000) return;
+  requested = { phone: !result.phone, address: !result.address, email: requested.email };
   log('Searching Google for missing official business contacts...');
   const googleContact = await getGoogleContactInfo(
-    input.lead || {},
+    lead,
     requested,
-    { budgetMs: input.googleFallbackBudgetMs || 45000, log }
+    { budgetMs: googleFallbackRemainingMs(deadline), log, strictContacts: input.contactRequirements === 'phone_address', ...options }
   );
   mergeGoogleContact(result, googleContact);
 }
+
 
 function mergeRecentActivityEvidence(postCollections, maxResults) {
   const observations = postCollections
@@ -1031,6 +1074,17 @@ async function processRequest(request, index) {
   if (skipInactiveEnrichment) {
     log('inactive within the window; skipping Google contact enrichment');
     result.googleContactWarning = 'Google fallback skipped for a lead already proven inactive';
+  } else if (request.contactTarget && scopedInput.includeContactDetails !== false) {
+    const contactStartedAt = Date.now();
+    try { await scrapeCotTargetContacts(result, request, scopedInput, {
+      proofOutput: toCotProofOutput(toCardDataOutput(result, scopedInput, activityWindowDays), result),
+      readPage: (url, deadline = Date.now() + 12000) => openFacebookPageSession(url, {
+        newProxyUrl: makeProxyDrawer(index), maxAttempts: 1,
+        timeoutMs: Math.max(500, Math.min(12000, deadline - Date.now())), log }),
+      lookup: applyGoogleContactFallback, readSite: readGoogleContactCandidate, log,
+    }); }
+    catch { result.contactLookup = { status: 'failed', required: ['phone', 'address'] }; }
+    result.stageTimingsMs.facebookEnrichment = Date.now() - contactStartedAt;
   } else {
     const googleStartedAt = Date.now();
     await applyGoogleContactFallback(result, scopedInput, log);

@@ -1,5 +1,53 @@
 # Automatic Techies search, COT validation and contact CSV
 
+## Strict good-lead contact scraping
+
+Validation now has two bounded Actor stages inside one validation batch. The first
+reads the exact proof and inexpensive embedded page evidence. One model analysis
+classifies the business opportunity independently of missing contact details. For
+GOOD prospects with verified fresh proof and an attributable named business, the
+second Actor stage must seek both phone and address before delivery. Rejected
+opportunities do not trigger the additional contact lookup. Rows already carrying
+both verified fields need no additional lookup.
+
+For a third-party post (for example a town guide promoting another business), the
+model may select only a literal business name, event quote and location quote from
+the exact post. The Actor re-reads that proof, discards the publisher's contacts,
+and checks the target business and location independently. Search rank or name
+similarity alone never authorizes copying a publisher's contacts. Ambiguous targets
+stay in review. Existing historical results are not silently rewritten.
+
+Contact sources are, in order where available: the matched business page and up to
+two public About/contact routes; the business's linked official website and one
+same-host contact page; bounded discovery of identity-matched Facebook pages and
+official sites. An email alone cannot stop required phone/address work. Exact
+first-party post address lines, official JSON-LD postal addresses, and explicit
+official address blocks are supported. Missing or ambiguous fields stay blank.
+Every accepted field retains its own source URL. Direct site connections reject
+private/internal destinations, including DNS results and redirect destinations.
+
+The two Actor stages share the existing COT_ACTOR_MAX_CHARGE_USD allowance equally
+(USD 0.10 + USD 0.10 when the existing batch allowance is USD 0.20), with 120/180
+second Actor timeouts and automatic restarts off. No extra model analysis occurs
+after contact lookup. A failed/uncertain contact run settles the batch in review;
+it is not automatically retried. A later deliberately requested validation is a
+new paid operation. Lifetime validation counters count API batches, which may now
+contain two child Actor runs. The schedule and CONFIG limits are not changed by
+this code update.
+
+The batch API includes quality_assessment, contact_lookup and the original
+contact_enrichment contract. The cloud snapshot/operational CSV names a resolved
+target business; the original publisher remains in the saved lead and snapshot.
+Manual CSV exports preserve original columns and add Verified Contact Business
+and Contact Lookup Status. READY still requires GOOD quality, verified freshness,
+matched event identity, both verified contacts, and no review/conflict flags.
+
+Deployment order: build the validation Actor from this matching source first,
+then deploy the backend, controller Actor (including its shared contact modules),
+and frontend. This section describes implemented code, not a verified deployment.
+The legacy /analyze endpoint remains analysis-only; automatic scraping uses the
+existing /validate-batch flow. No destination submission is added.
+
 This worker uses the existing search Actor **53bGXKeIhVmNMTCi4**. It does not
 change that Actor or require the browser/frontend to remain open.
 

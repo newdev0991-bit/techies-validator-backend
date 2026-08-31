@@ -31,7 +31,7 @@ export async function exportFiles(store, directory, now) {
     const r = { ...assess(saved.response, now), validatedAt: saved.validatedAt };
     const c = r.contacts;
     const group = r.status === 'READY' ? 'enriched' : r.status === 'REJECTED' ? 'rejected' : 'review';
-    groups[group].push([row.id, lead['Company Name'], lead['Lead Proof URL'], c.phone.value, c.address.value,
+    groups[group].push([row.id, r.identity.status === 'matched' ? r.identity.businessName || lead['Company Name'] : lead['Company Name'], lead['Lead Proof URL'], c.phone.value, c.address.value,
       c.postcode.value, c.phone.sourceUrl, c.address.sourceUrl, r.verdict, r.status, c.status,
       r.freshness.timestamp, r.validatedAt, row.cycle, r.reason]);
   }

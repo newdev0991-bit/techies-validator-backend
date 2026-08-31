@@ -60,14 +60,15 @@ export function buildCotActorInput(entries, options = {}) {
     requests: entries.map((entry) => ({
       requestKey: entry.requestKey,
       url: entry.url,
-      lead: entry.lead
+      lead: entry.lead,
+      ...(entry.contactTarget ? { contactTarget: entry.contactTarget } : {})
     })),
     startUrls: entries.map((entry) => ({ url: entry.url })),
     activityWindowDays: options.activityWindowDays || 1,
     maxPosts: options.maxPosts || 10,
-    includeContactDetails: true,
+    includeContactDetails: options.phase !== 'proof',
     contactRequirements: 'phone_address',
-    includeGoogleFallback: options.includeGoogleFallback !== false,
+    includeGoogleFallback: options.phase !== 'proof' && options.includeGoogleFallback !== false,
     includePageDetails: true,
     includePreviousPosts: true
   };

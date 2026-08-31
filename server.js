@@ -21,6 +21,8 @@ import {
 } from './src/cot-batch.js';
 import { applyFreshnessPolicy, evaluateLeadFreshness } from './src/freshness.js';
 import { enrichCotContacts, cotLeadWithContacts } from './src/cot-contacts.js';
+import { runGoodLeadContactPhase } from './src/cot-contact-workflow.js';
+import { cotActorPhaseOptions } from './src/pipeline-capabilities.js';
 import { evaluateCotIdentity, applyCotIdentityPolicy } from './src/cot-identity.js';
 import { pipelineAccess, pipelineActorOptions } from './src/pipeline-capabilities.js';
 import {
@@ -185,6 +187,8 @@ EVIDENCE INTEGRITY RULES:
 - A proof URL or lead statement alone does not prove the age, identity, or history of a post.
 - The Company Name may be only a search-result author. A publisher discussing another business is not that business. Classify business_identity as self, third_party, or unknown. Supply the business name and a short exact quote from Post Caption/Text supporting that relationship. Do not infer a Facebook profile from a social handle. Unknown identity requires review.
 - Even a nonempty post sample cannot establish page age or lifetime volume. page_maturity MUST be "unknown"; do not call a page new or established from the number of supplied posts.
+- Judge the business opportunity separately from contact availability. Missing phone/address triggers deterministic contact scraping and review, not an invented contact or an automatic BAD verdict.
+- For business_identity, name the business opening/moving (not a publisher promoting it). evidenceQuote must include its literal name and event for third_party posts. Add locationQuote as an exact short location substring from Post Caption/Text, or an empty string when absent. Never guess a location.
 
 VALIDATION CONTEXT:
 You're evaluating leads for a UK-based B2B service company. Good leads are:
@@ -192,7 +196,7 @@ You're evaluating leads for a UK-based B2B service company. Good leads are:
 - Business relocations or expansions to new locations
 - New ownership/management changes
 - Businesses that genuinely need B2B services (restaurants, retail shops, offices, salons, etc.)
-- Phone numbers are strongly preferred for contact; missing numbers reduce opportunity quality
+- Phone and address are required for delivery; the contact scraper retrieves them after this opportunity assessment
 - Must be in serviceable UK locations
 
 SEMANTIC INDICATORS TO LOOK FOR IN POST CAPTION:
@@ -212,14 +216,14 @@ Bad leads are:
 - Non-commercial entities (churches, charities, personal blogs, non-commercial personal pages)
 - Locations outside UK mainland or in banned areas (Ireland, Northern Ireland, Guernsey, Jersey, Isle of Man)
 - Businesses clearly not needing B2B services
-- Missing essential contact information
+- Missing contact information alone is not a reason to classify a business opportunity as BAD
 
 MINOR UPDATES TO REJECT (Not new businesses):
 - New products/services: "new menu", "new items", "new pricelist", "new services", "new offers"
 - Cosmetic changes: "new decor", "new look", "renovated", "refurbished", "new paint"
 - Partial expansions: "upstairs only", "new section", "new floor", "expansion area"
 - Equipment/furniture: "new equipment", "new furniture", "new stand", "new display"
-- Referrals to other businesses: "check out [other business]", "shoutout to", "visit our friends"
+- Generic referrals without a named business and explicit qualifying opening/relocation event
 - Staff changes only: "new staff", "new team member" (unless combined with "new ownership")
 
 CRITICAL FACTORS TO CONSIDER:
@@ -236,7 +240,7 @@ CRITICAL FACTORS TO CONSIDER:
    - GOOD: Explicit opening of the candidate business itself, with supporting business evidence
    - GOOD: Explicit relocation of the candidate business itself
    - BAD: Product-only or cosmetic update without a qualifying business event
-   - Third-party promotions cannot establish the candidate publisher as a new business
+   - A third-party post can identify a GOOD opportunity for a named business explicitly opening or relocating. Classify the named business, not the publisher; set business_identity.relationship to third_party with literal name, event and location evidence. Contact ownership is checked independently before delivery.
 
 4. Business Type: Does this business type typically need B2B services?
 5. Contact Info: Can they actually be reached for sales outreach?
@@ -270,8 +274,8 @@ BAD LEADS:
 - "Upstairs section now open! More seating available"
   + Caption: Partial expansion (not full opening) + BAD
 
-- "Shoutout to [Business Name] for their grand opening!"
-  + Caption: Referring to other business + BAD
+- "Check out our friends' latest offers!"
+  + Caption: Generic referral with no qualifying business event + BAD
 
 Analyze this lead carefully and provide your assessment in json format:
 
@@ -286,7 +290,8 @@ Analyze this lead carefully and provide your assessment in json format:
   "business_identity": {
     "relationship": "self" | "third_party" | "unknown",
     "businessName": "Business the event actually concerns, or empty if unknown",
-    "evidenceQuote": "Exact short quote from Post Caption/Text, or empty if unknown"
+    "evidenceQuote": "Exact short quote from Post Caption/Text, or empty if unknown",
+    "locationQuote": "Exact location substring from Post Caption/Text, or empty if absent"
   },
   "caption_analysis": {
     "has_opening_keywords": true/false,
@@ -340,7 +345,7 @@ function removeUnsupportedHistoryClaims(analysis, hasSample = false) {
 }
 
 async function analyzeLead(lead) {
-  const contactEnrichment = enrichCotContacts(lead);
+  const contactEnrichment = enrichCotContacts(lead, lead['Search Post ID'] ? evaluateCotIdentity(lead) : undefined);
   const analysisLead = cotLeadWithContacts(lead, contactEnrichment);
   const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
   if (!OPENAI_API_KEY) {
@@ -415,6 +420,10 @@ async function analyzeLead(lead) {
     );
   }
 
+  return finalizeCotAnalysis(lead, aiResponse);
+}
+
+export function finalizeCotAnalysis(lead, aiResponse) {
   const freshnessData = evaluateLeadFreshness(lead, {
     leadDateOrder: configuredLeadDateOrder()
   });
@@ -425,6 +434,9 @@ async function analyzeLead(lead) {
   const scrapedResult = lead?.fetchResults?.rawData || lead?.fetchResults || null;
   return {
     ...policyResponse,
+    quality_assessment: { verdict: aiResponse.verdict, reasoning: aiResponse.reasoning,
+      needs_manual_review: aiResponse.needs_manual_review === true, business_identity: aiResponse.business_identity },
+    contact_lookup: scrapedResult?.contactLookup || { status: 'not_recorded' },
     contact_enrichment: finalContacts,
     freshness: freshnessData,
     scraped_post_data: scrapedResult
@@ -436,7 +448,7 @@ async function analyzeLead(lead) {
       : null,
     apify_scraping_success: isSuccessfulFacebookScrape(scrapedResult),
     posted_at: freshnessData.timestamp,
-    needs_manual_review: freshnessData.requiresManualReview || businessIdentity.requiresManualReview || finalContacts.requiresManualReview
+    needs_manual_review: aiResponse.needs_manual_review === true || freshnessData.requiresManualReview || businessIdentity.requiresManualReview || finalContacts.requiresManualReview
   };
 }
 
@@ -560,7 +572,7 @@ function buildFetchResults(result, fallbackUrl) {
   };
 }
 
-async function runFacebookActorBatch(rows) {
+async function runFacebookActorBatch(rows, phase = 'proof') {
   const token = process.env.APIFY_API_TOKEN;
   if (!token) {
     throw new PublicError(503, 'APIFY_NOT_CONFIGURED', 'Facebook scraping is temporarily unavailable.');
@@ -575,7 +587,8 @@ async function runFacebookActorBatch(rows) {
     return {
       requestKey: row.clientRowId,
       url: linkValidation.value,
-      lead: normalizedLead
+      lead: normalizedLead,
+      ...(row.contactTarget ? { contactTarget: row.contactTarget } : {})
     };
   });
 
@@ -593,13 +606,14 @@ async function runFacebookActorBatch(rows) {
     { min: 10, max: 300 }
   ));
   const actorInput = buildCotActorInput(entries, {
+    phase,
     activityWindowDays,
     maxPosts,
     includeGoogleFallback: process.env.GOOGLE_CONTACT_FALLBACK !== 'false'
   });
 
   console.log(`[facebook-actor-batch] Starting ${actorId} for ${entries.length} row(s).`);
-  const run = await client.actor(actorId).call(actorInput, { waitSecs, ...pipelineActorOptions() });
+  const run = await client.actor(actorId).call(actorInput, { waitSecs, ...cotActorPhaseOptions(phase) });
   const runStatus = typeof run?.status === 'string' ? run.status.toUpperCase() : '';
   if (['READY', 'RUNNING'].includes(runStatus)) {
     throw new PublicError(504, 'APIFY_TIMEOUT', 'Facebook batch timed out. Please retry the saved batch.');
@@ -714,6 +728,9 @@ async function runCotValidationBatch(batchId, fingerprint, rows) {
       analysis
     };
   }));
+  await runGoodLeadContactPhase(results, {
+    scrape: candidates => runFacebookActorBatch(candidates, 'contacts'), finalize: finalizeCotAnalysis,
+  });
   return { success: true, batchId, results };
 }
 

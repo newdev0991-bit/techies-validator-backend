@@ -46,4 +46,6 @@ test('HTTP analysis includes deterministic contacts in the legacy response and p
   assert.equal(result.needs_manual_review, true); // contacts do not provide a proof timestamp
   assert.match(prompt, /Phone Number: Provided \(01632960123\)/);
   assert.match(prompt, /Address: Example premises SW1A 1AA/);
+  assert.doesNotMatch(prompt, /- Missing essential contact information/);
+  assert.match(prompt, /locationQuote/);
 });

@@ -34,7 +34,9 @@ export async function readCotProof(url, options = {}, readers = {}) {
         result.posts.push(...parsed.posts);
         // Metadata resolves the publisher, never the lead company's identity.
         const resolvedKeys = new Set([target.key, ...(parsed.resolution?.verified ? parsed.resolution.aliasKeys : [])]);
-        if (!result.posts.some(post => resolvedKeys.has(cotPostKey(post.postUrl)))) await readParent(parsed.parentUrl);
+        // Even when the document contains the exact post, its parent is still
+        // needed for identity and contact evidence (especially reels/permalinks).
+        if (!result.session || !result.posts.some(post => resolvedKeys.has(cotPostKey(post.postUrl)))) await readParent(parsed.parentUrl);
     } else result.failureReason = document.failureReason;
     const keys = new Set([target.key, ...(result.resolution?.verified ? result.resolution.aliasKeys : [])]);
     if (!result.posts.some(post => keys.has(cotPostKey(post.postUrl)))) {

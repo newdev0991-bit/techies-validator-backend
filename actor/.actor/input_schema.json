@@ -107,6 +107,11 @@
                         "type": "string",
                         "description": "Facebook business page or post URL for this lead."
                     },
+                    "contactTarget": {
+                        "title": "Good-lead contact target",
+                        "type": "object",
+                        "description": "Business name, relationship, evidenceQuote and locationQuote selected by the validator after quality analysis. The Actor rechecks the exact proof before lookup; submitted contact values are never evidence."
+                    },
                     "lead": {
                         "title": "Lead record",
                         "type": "object",

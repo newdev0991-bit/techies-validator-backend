@@ -107,7 +107,8 @@ export function normalizeAiResponse(value) {
       relationship: ['self', 'third_party'].includes(value.business_identity?.relationship)
         ? value.business_identity.relationship : 'unknown',
       businessName: stringValue(value.business_identity?.businessName, '').slice(0, 200),
-      evidenceQuote: stringValue(value.business_identity?.evidenceQuote, '').slice(0, 500)
+      evidenceQuote: stringValue(value.business_identity?.evidenceQuote, '').slice(0, 500),
+      locationQuote: stringValue(value.business_identity?.locationQuote, '').slice(0, 160)
     },
     caption_analysis: {
       has_opening_keywords: booleanValue(caption.has_opening_keywords),

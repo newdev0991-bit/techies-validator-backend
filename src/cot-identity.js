@@ -1,4 +1,5 @@
 import { normalizeLead } from './card-data.js';
+import { resolvedContactTarget } from '../actor/src/contactTarget.js';
 
 const text = value => typeof value === 'string' ? value.trim() : '';
 const nameKey = value => text(value).normalize('NFKD').toLowerCase()
@@ -13,6 +14,11 @@ export function evaluateCotIdentity(lead = {}, claim = {}) {
   const caption = text(raw.postText);
   const company = normalizeLead(lead).name;
   const publisher = text(raw.postAuthor || raw.pageName);
+  const target = resolvedContactTarget(raw, claim);
+  if (target) return { schemaVersion: 'cot-business-identity-v1', status: 'matched',
+    publisherName: publisher, businessName: target.businessName, relationship: target.relationship,
+    evidenceQuote: target.evidenceQuote, locationQuote: target.locationQuote, requiresManualReview: false,
+    reason: 'The business named in the exact proof has independently matched contact-source evidence.' };
   const imported = Boolean(lead['Search Post ID']);
   const quoted = text(claim?.evidenceQuote);
   const businessName = text(claim?.businessName);
@@ -37,7 +43,7 @@ export function evaluateCotIdentity(lead = {}, claim = {}) {
   return { schemaVersion: 'cot-business-identity-v1', status, publisherName: publisher,
     businessName: status === 'matched' ? company : businessName,
     relationship: thirdParty ? 'third_party' : status === 'matched' ? 'self' : 'unknown',
-    evidenceQuote: quotePresent ? quoted : '',
+    evidenceQuote: quotePresent ? quoted : '', locationQuote: text(claim?.locationQuote),
     requiresManualReview: !['matched', 'not_required'].includes(status), reason };
 }
 

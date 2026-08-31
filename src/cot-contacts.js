@@ -1,5 +1,7 @@
 import { normalizeLead } from './card-data.js';
 import { isSuccessfulFacebookScrape, validateFacebookUrl } from './validation.js';
+import { normalizeUkContactPhone } from '../actor/src/contactValues.js';
+export { normalizeUkContactPhone } from '../actor/src/contactValues.js';
 
 const text = value => typeof value === 'string' ? value.trim() : '';
 
@@ -11,13 +13,10 @@ function sourceUrl(value) {
   } catch { return ''; }
 }
 
-export function normalizeUkContactPhone(value) {
-  const raw = text(value);
-  if (!/^[+\d\s().-]+$/.test(raw)) return '';
-  let digits = raw.replace(/\D/g, '');
-  if (digits.startsWith('0044')) digits = `0${digits.slice(4)}`;
-  else if (digits.startsWith('44')) digits = `0${digits.slice(2)}`;
-  return /^0[1-9]\d{9}$/.test(digits) ? digits : '';
+function facebookOwner(value) {
+  if (!validateFacebookUrl(value).ok) return '';
+  const url = new URL(value);
+  return url.searchParams.get('id') || url.pathname.split('/').filter(Boolean)[0] || '';
 }
 
 function field(value, submitted, source, url, normalize = v => text(v).toLowerCase().replace(/\s+/g, ' ')) {
@@ -39,19 +38,21 @@ export function enrichCotContacts(lead = {}, businessIdentity) {
   const usable = sameRow && isSuccessfulFacebookScrape(raw)
     && !raw.scrape?.blocked && !raw.scrape?.loginRequired && !raw.scrape?.notFound
     && !raw.business?.wrongBusiness && !businessIdentity?.requiresManualReview;
+  const isPublisherContact = url => businessIdentity?.relationship === 'third_party' &&
+    facebookOwner(url) && facebookOwner(url) === facebookOwner(raw.facebookEvidenceUrl || submitted.link);
   const phoneUrl = sourceUrl(contact.sourceUrl);
   const phoneSource = text(contact.phoneSource);
   const phoneAllowed = usable && contact.identityStatus === 'matched'
-    && contact.phoneVerified === true && phoneUrl
+    && contact.phoneVerified === true && phoneUrl && !isPublisherContact(phoneUrl)
     && (/^facebook-/.test(phoneSource) ? validateFacebookUrl(phoneUrl).ok
       : /^google-official-website/.test(phoneSource) && contact.source === 'google-official-website');
   const phone = field(phoneAllowed ? normalizeUkContactPhone(contact.phone) : '',
     submitted.phone, phoneSource, phoneUrl, normalizeUkContactPhone);
   const addressUrl = sourceUrl(address.sourceUrl);
-  const addressAllowed = usable && raw.business?.identityStatus === 'matched'
-    && address.verified === true &&
-    ((address.source === 'facebook-page-contact' && validateFacebookUrl(addressUrl).ok) ||
-     (address.source === 'google-official-website-structured' && address.identityStatus === 'matched' && addressUrl));
+  const addressAllowed = usable && (raw.business?.identityStatus === 'matched' || businessIdentity?.status === 'matched')
+    && address.verified === true && !isPublisherContact(addressUrl) &&
+    ((/^facebook-(?:page|post)-contact$/.test(address.source || '') && validateFacebookUrl(addressUrl).ok) ||
+     (/^google-official-website-(?:structured|address)$/.test(address.source || '') && address.identityStatus === 'matched' && addressUrl));
   const fullAddress = field(addressAllowed ? text(address.full) : '',
     submitted.address, text(address.source), addressUrl);
   // Derive a postcode only from the observed address, never a submitted fallback.
@@ -64,6 +65,8 @@ export function enrichCotContacts(lead = {}, businessIdentity) {
   const complete = Boolean(phone.value && fullAddress.value);
   return {
     schemaVersion: 'cot-contact-enrichment-v1',
+    businessName: businessIdentity?.status === 'matched' ? businessIdentity.businessName : '',
+    lookup: raw.contactLookup || { status: 'not_recorded' },
     status: conflicts ? 'review_required' : complete ? 'complete' : fields.some(item => item.value) ? 'partial' : 'unavailable',
     phone, address: fullAddress, postcode: postcodeField,
     requiresManualReview: conflicts || !complete,

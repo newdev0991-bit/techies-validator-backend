@@ -13,7 +13,8 @@ export function buildActorRequests(input = {}) {
                     suppliedKey == null || String(suppliedKey).trim() === ''
                         ? String(index)
                         : String(suppliedKey).trim();
-                return { url, lead, requestKey };
+                return { url, lead, requestKey, ...(value.contactTarget && typeof value.contactTarget === 'object'
+                    ? { contactTarget: value.contactTarget } : {}) };
             })
             .filter((entry) => entry.url);
 

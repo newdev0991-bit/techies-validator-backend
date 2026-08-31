@@ -83,7 +83,7 @@ function normalizePhone(candidate) {
     if (digits.length < 9 || digits.length > 15) return '';
     // Prices, dates and follower counts survive the digit test; a real number is written with
     // separators or an international prefix.
-    if (!/[+\s().-]/.test(trimmed)) return '';
+    if (!/[+\s().-]/.test(trimmed) && !/^0[1-9]\d{9}$/.test(trimmed)) return '';
     return trimmed.replace(/\s+/g, ' ');
 }
 
@@ -121,13 +121,15 @@ export function extractWebsite(textRuns) {
 }
 
 export function extractAddress(textRuns) {
+    const candidates = [];
     for (const run of textRuns) {
-        if (run.length < 8 || run.length > 120) continue;
-        if (UK_POSTCODE_RE.test(run) || (STREET_RE.test(run) && /\d/.test(run) && run.includes(','))) {
-            return run;
+        if (run.length < 8 || run.length > 180 || /https?:|@/.test(run)) continue;
+        if ((UK_POSTCODE_RE.test(run) && STREET_RE.test(run)) || (STREET_RE.test(run) && /\d/.test(run) && run.includes(','))) {
+            candidates.push(run);
         }
     }
-    return '';
+    const unique = [...new Set(candidates)];
+    return unique.length === 1 ? unique[0] : '';
 }
 
 /**
@@ -180,6 +182,7 @@ export function extractPageEvidence(html) {
 
     return {
         pageName: extractPageName(decoded),
+        locationHint: decodeHtmlEntities(decoded.match(OG_TITLE_RE)?.[1] || '').split('|').slice(1).join(' ').trim(),
         category: decodeHtmlEntities(decoded.match(CATEGORY_RE)?.[1] || ''),
         about,
         email: extractEmail(textRuns),
