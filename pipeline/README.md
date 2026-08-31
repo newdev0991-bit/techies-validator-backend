@@ -230,6 +230,40 @@ finish, and the next enabled tick resumes polling it.
 
 ## Verification
 
+### Search Actor v2 contact handoff
+
+Ingestion accepts `facebook-search-posts-v1` and `facebook-search-posts-v2`.
+V2 `author.phone` and `author.address` populate the original lead input columns;
+the postcode is extracted only from the supplied address. Author identity,
+website, email, phone source type and reported confidence are preserved in
+`Search Author Contact` (JSON stored as a string for the batch echo contract).
+No search-only value is promoted to verified contact evidence. Unknown schema
+versions remain rejected.
+
+The current search Actor source records contact values for the post author. It
+does not emit field-level verification flags or the exact source URL for each
+value; `contactSource` describes the phone and may differ from the address's
+source. In particular, publisher contacts cannot serve a promoted business.
+Verified output continues to require exact-proof identity/freshness and phone
+and address provenance. A matched self-authored page may pass its discovered
+website as a candidate to the existing bounded verifier, without treating that
+URL as an independently verified page link. Complete verified proof contacts
+already skip the second lookup.
+
+`search-contacts.csv` is a separate audit export, including pending rows.
+`enriched.csv` keeps verified contacts only. Cloud snapshots expose a bounded,
+whitelisted `searchAuthor` object for the dashboard's unverified-contact panel.
+This does not rewrite previous saved results or revalidate quarantined rows.
+Recover previously quarantined v2 rows only through a separately audited replay
+with duplicate and paid-validation checks; never start a replacement search just
+to retrieve the same existing dataset.
+
+Optional search input controls now support `maxAuthorRequests` (0–40),
+`authorTimeoutMs` (1000–30000), `includeGoogleFallback` (boolean),
+`googleFallbackBudgetMs` (10000–90000), and `googleSearchTimeoutMs` (5000–20000).
+Omitting them retains the Actor defaults; existing run cost/time ceilings remain
+unchanged. This code change does not enable a schedule or alter live settings.
+
 `npm run test:pipeline` covers complete synthetic flow, authenticated HTTP
 capability/validation routes, restart/pagination recovery, locks, duplicate
 posts, daily caps, ambiguous paid calls, safe retries, row mismatch,

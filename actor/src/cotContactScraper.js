@@ -14,6 +14,15 @@ export async function scrapeCotTargetContacts(result, request, scopedInput, { pr
   const subjectLead = { name: target.businessName, address: location,
     zip: location.match(/\b(?:GIR\s?0AA|[A-Z]{1,2}\d[A-Z\d]?\s?\d[A-Z]{2})\b/i)?.[0] || '',
     requireLocation: target.relationship === 'third_party', country: 'United Kingdom' };
+  const author = request.searchAuthor;
+  // Reuse discovery, not its verification claim. Never use the publisher's site
+  // for a third-party event or treat a search-supplied site as a page-linked site.
+  if (target.relationship === 'self' && author &&
+      contactNameKey(author.name) === contactNameKey(target.businessName) &&
+      String(author.id || '') && String(author.id) === String(result.pageId || '') &&
+      typeof author.website === 'string' && author.website.length <= 2000) {
+    subjectLead.contactCandidateWebsite = author.website;
+  }
   if (target.relationship === 'third_party') {
     // All publisher contact values and site links are discarded before discovery.
     for (const field of ['phone', 'address', 'email', 'website']) {

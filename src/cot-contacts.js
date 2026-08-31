@@ -1,6 +1,7 @@
 import { normalizeLead } from './card-data.js';
 import { isSuccessfulFacebookScrape, validateFacebookUrl } from './validation.js';
 import { normalizeUkContactPhone } from '../actor/src/contactValues.js';
+import { searchContactsFromLead } from './search-author-contacts.js';
 export { normalizeUkContactPhone } from '../actor/src/contactValues.js';
 
 const text = value => typeof value === 'string' ? value.trim() : '';
@@ -29,6 +30,12 @@ function field(value, submitted, source, url, normalize = v => text(v).toLowerCa
 // OCR guesses, or submitted fields echoed back as if they had been scraped.
 export function enrichCotContacts(lead = {}, businessIdentity) {
   const submitted = normalizeLead(lead);
+  const searchAuthor = searchContactsFromLead(lead);
+  // Publisher input is retained in searchAuthor, but must not conflict with the
+  // independently verified contacts of a different business named in the post.
+  if (searchAuthor && businessIdentity?.relationship === 'third_party') {
+    submitted.phone = ''; submitted.address = ''; submitted.zip = '';
+  }
   const raw = lead.fetchResults?.rawData || lead.fetchResults?.actorData || lead.fetchResults || {};
   const proof = validateFacebookUrl(submitted.link);
   const input = validateFacebookUrl(raw.inputUrl);
@@ -65,6 +72,7 @@ export function enrichCotContacts(lead = {}, businessIdentity) {
   const complete = Boolean(phone.value && fullAddress.value);
   return {
     schemaVersion: 'cot-contact-enrichment-v1',
+    searchAuthor,
     businessName: businessIdentity?.status === 'matched' ? businessIdentity.businessName : '',
     lookup: raw.contactLookup || { status: 'not_recorded' },
     status: conflicts ? 'review_required' : complete ? 'complete' : fields.some(item => item.value) ? 'partial' : 'unavailable',

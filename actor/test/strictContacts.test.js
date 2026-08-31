@@ -17,6 +17,24 @@ const proof = { inputUrl: proofUrl, postText: caption, pageName: 'Synthetic Publ
 const html = (title, ...runs) => `<meta property="og:title" content="${title}">${runs.map(text => JSON.stringify({ text })).join('')}`;
 const noRead = async () => assert.fail('unexpected request');
 
+test('search Actor website hint is forwarded only for the exact self-authored page; candidate values never become verified', async () => {
+  for (const correctId of [true, false]) {
+    const ownCaption = 'We are opening our new premises in Taunton.';
+    const ownClaim = { businessName: name, relationship: 'self', evidenceQuote: ownCaption, locationQuote: 'Taunton' };
+    const ownProof = { ...proof, pageName: name, postText: ownCaption };
+    const result = { inputUrl: proofUrl, pageName: name, pageId: '2468', identityStatus: 'matched' };
+    await scrapeCotTargetContacts(result, { contactTarget: ownClaim, searchAuthor: { name,
+      id: correctId ? '2468' : 'other', website: 'https://candidate.test', phone: '01632960999', address: 'Unverified premises' } }, {}, {
+      proofOutput: ownProof, readPage: noRead, readSite: noRead,
+      lookup: async (current, input) => {
+        assert.equal(input.lead.contactCandidateWebsite, correctId ? 'https://candidate.test' : undefined);
+        assert.equal(input.lead.officialWebsite, undefined);
+        assert.notEqual(current.phone, '01632960999'); assert.notEqual(current.address, 'Unverified premises');
+      },
+    });
+  }
+});
+
 test('promoted-business contact phase discards publisher contacts and reads the matched target About page', async () => {
   const result = { pageName: 'Synthetic Publisher', identityStatus: 'matched', inputUrl: proofUrl,
     facebookEvidenceUrl: 'https://www.facebook.com/syntheticpublisher',

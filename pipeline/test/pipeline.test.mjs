@@ -11,6 +11,8 @@ import { recover } from '../recovery.mjs';
 import { csvCell, exportFiles } from '../exports.mjs';
 import { enrichCotContacts } from '../../src/cot-contacts.js';
 import { pipelineActorOptions, pipelineAccess } from '../../src/pipeline-capabilities.js';
+import { searchLead } from '../records.mjs';
+import { resultSnapshot } from '../../cloud/results.mjs';
 
 const base=JSON.parse(readFileSync(new URL('../config.example.json',import.meta.url)));
 const NOW=Date.parse('2026-08-30T12:00:00Z');
@@ -43,6 +45,51 @@ function fixture(t,rows=[post()]) {
   return {c,s,p,runner,calls,advance:(ms)=>{clock+=ms;},now:()=>clock};
 }
 async function ingest(f){assert.equal((await f.runner.tick()).status,'search_started');assert.equal((await f.runner.tick()).status,'search_ingested');}
+
+test('v2 author contacts survive ingestion, validator payload, cloud snapshot and separate source export without becoming verified', async t => {
+  const source = { ...post(), schemaVersion: 'facebook-search-posts-v2', author: {
+    name: 'Synthetic Example', id: '12345', url: 'https://www.facebook.com/example',
+    phone: '01632 960999', address: '12 Example Road, London SW1A 1AA', website: 'example.test',
+    contactSource: 'google-official-website', contactIdentityConfidence: 'high', verified: true, privateToken: 'do-not-copy' } };
+  const f = fixture(t, [source]); await ingest(f);
+  assert.equal(f.s.db.prepare('SELECT count(*) n FROM quarantine').get().n, 0);
+  const lead = JSON.parse(f.s.pending(1)[0].lead);
+  assert.equal(lead['Phone Number'], source.author.phone);
+  assert.equal(lead['Address 1'], source.author.address);
+  assert.equal(lead['Post Code'], 'SW1A 1AA');
+  assert.equal(JSON.parse(lead['Search Author Contact']).verified, false);
+  assert.doesNotMatch(lead['Search Author Contact'], /privateToken/);
+  assert.equal(resultSnapshot(f.s, NOW, false).rows[0].searchAuthor.phone, source.author.phone);
+  f.p.validate = async payload => {
+    assert.deepEqual(payload.leads[0].lead, lead);
+    return response(payload, row => { row.fetchResults.rawData.contact = {}; row.fetchResults.rawData.address = {}; });
+  };
+  await f.runner.tick();
+  const view = resultSnapshot(f.s, NOW, false).rows[0];
+  assert.equal(view.status, 'REVIEW_REQUIRED'); assert.equal(view.phone, ''); assert.equal(view.address, '');
+  assert.equal(view.searchAuthor.phone, source.author.phone);
+  assert.doesNotMatch(readFileSync(path.join(f.c.outputDir, 'enriched.csv'), 'utf8'), /01632 960999/);
+  assert.match(readFileSync(path.join(f.c.outputDir, 'search-contacts.csv'), 'utf8'), /01632 960999/);
+  assert.match(readFileSync(path.join(f.c.outputDir, 'search-contacts.csv'), 'utf8'), /UNVERIFIED_AUTHOR_CONTACT/);
+});
+
+test('legacy search rows stay compatible; unknown schemas and malformed IDs remain quarantinable', () => {
+  assert.equal(searchLead({ ...post(), author: { name: 'Synthetic', phone: 'untrusted-v1-field' } })['Phone Number'], '');
+  assert.throws(() => searchLead({ ...post(), schemaVersion: 'facebook-search-posts-v3' }), /INVALID_SEARCH_POST_ID/);
+  assert.throws(() => searchLead({ ...post(), post_id: 123 }), /INVALID_SEARCH_POST_ID/);
+});
+
+test('author enrichment options remain bounded and preserve explicit disable switches', () => {
+  const config = structuredClone(base);
+  Object.assign(config.searchInput, { maxAuthorRequests: 0, authorTimeoutMs: 1000, includeGoogleFallback: false,
+    googleFallbackBudgetMs: 10000, googleSearchTimeoutMs: 5000 });
+  assert.equal(validateConfig(config).searchInput.maxAuthorRequests, 0);
+  for (const [key, value] of Object.entries({ maxAuthorRequests: 41, authorTimeoutMs: 30001,
+    googleFallbackBudgetMs: 90001, googleSearchTimeoutMs: 20001, includeGoogleFallback: 'true' })) {
+    const bad = structuredClone(config); bad.searchInput[key] = value;
+    assert.throws(() => validateConfig(bad), new RegExp(key));
+  }
+});
 
 test('search -> COT -> verified CSV, cooldown, durable cross-cycle deduplication',async t=>{
   const f=fixture(t);await ingest(f);assert.equal((await f.runner.tick()).status,'validated');

@@ -352,11 +352,14 @@ async function applyGoogleContactFallback(result, input, log = console.log, opti
   const lead = { ...(input.lead || {}) };
   // A page-linked official site is a stronger and cheaper starting point than
   // search. Never replace it with a guessed .co.uk domain.
-  if (result.website && (result.identityStatus === 'matched' || result.contactIdentityStatus === 'matched')) {
-    const url = /^https?:\/\//i.test(result.website) ? result.website : `https://${result.website}`;
+  const linkedSite = result.website && (result.identityStatus === 'matched' || result.contactIdentityStatus === 'matched');
+  const candidateSite = linkedSite ? result.website : lead.contactCandidateWebsite;
+  if (candidateSite) {
+    const url = /^https?:\/\//i.test(candidateSite) ? candidateSite : `https://${candidateSite}`;
     try {
-      lead.officialWebsite = assertPublicContactUrl(url).href;
-      const site = await readGoogleContactCandidate(lead.officialWebsite, deadline);
+      const checkedUrl = assertPublicContactUrl(url).href;
+      if (linkedSite) lead.officialWebsite = checkedUrl;
+      const site = await readGoogleContactCandidate(checkedUrl, deadline);
       const contact = await readOfficialContacts(site, lead, requested, {
         readCandidate: value => readGoogleContactCandidate(value, deadline),
         canRead: () => googleFallbackRemainingMs(deadline) >= 700,

@@ -2,6 +2,7 @@ import { mkdir, writeFile, rename } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { assess } from './records.mjs';
+import { searchContactsFromLead } from '../src/search-author-contacts.js';
 
 export const HEADERS = ['Post ID','Company Name','Lead Proof URL','Phone Number','Address 1','Post Code',
   'Phone Evidence URL','Address Evidence URL','AI Verdict','Output Status','Contact Status',
@@ -36,6 +37,15 @@ export async function exportFiles(store, directory, now) {
       r.freshness.timestamp, r.validatedAt, row.cycle, r.reason]);
   }
   for (const [name, rows] of Object.entries(groups)) await atomic(path.join(directory, `${name}.csv`), csv([HEADERS, ...rows]));
+  // Separate source audit: extracted author values are never mixed into the
+  // verified phone/address columns of the operational enriched.csv.
+  const candidates = store.rows().flatMap(row => {
+    const author = searchContactsFromLead(JSON.parse(row.lead));
+    return author ? [[row.id, row.cycle, author.name, author.url, author.phone, author.address,
+      author.email, author.website, author.contactSource, author.contactIdentityConfidence, 'UNVERIFIED_AUTHOR_CONTACT']] : [];
+  });
+  await atomic(path.join(directory, 'search-contacts.csv'), csv([
+    ['Post ID','Search Run ID','Author','Author URL','Extracted Phone','Extracted Address','Email','Website','Phone Source Type','Source Identity Confidence','Verification Status'], ...candidates]));
   const runs = store.db.prepare('SELECT record FROM runs ORDER BY id').all().map(r => JSON.parse(r.record));
   await atomic(path.join(directory, 'runs.json'), JSON.stringify(runs, null, 2));
   const status = { generatedAt: new Date(now).toISOString(), counts: Object.fromEntries(Object.entries(groups).map(([k,v])=>[k,v.length])),

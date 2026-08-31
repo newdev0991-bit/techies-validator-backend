@@ -42,6 +42,19 @@ function contacts(row) {
   return { rawData: raw };
 }
 
+test('third-party target contacts are not compared to imported publisher contact candidates', () => {
+  const row = fixture();
+  Object.assign(row.lead, { 'Phone Number': '01632960999', 'Address 1': 'Publisher address',
+    'Search Author Contact': JSON.stringify({ name: 'Synthetic Publisher', phone: '01632960999', address: 'Publisher address' }) });
+  row.fetchResults = contacts(row);
+  row.analysis = finalizeCotAnalysis({ ...row.lead, fetchResults: row.fetchResults }, row.analysis.quality_assessment);
+  const assessed = assess(row, Date.now());
+  assert.equal(assessed.status, 'READY');
+  assert.equal(assessed.contacts.phone.value, '01632960123');
+  assert.equal(assessed.contacts.searchAuthor.phone, '01632960999');
+  assert.equal(assessed.contacts.searchAuthor.verified, false);
+});
+
 test('GOOD opportunity behind a third-party publisher becomes delivery-ready only after target phone/address scraping', async t => {
   const row = fixture();
   assert.equal(row.analysis.verdict, 'UNCLEAR');

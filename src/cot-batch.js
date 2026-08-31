@@ -61,6 +61,7 @@ export function buildCotActorInput(entries, options = {}) {
       requestKey: entry.requestKey,
       url: entry.url,
       lead: entry.lead,
+      ...(entry.searchAuthor ? { searchAuthor: entry.searchAuthor } : {}),
       ...(entry.contactTarget ? { contactTarget: entry.contactTarget } : {})
     })),
     startUrls: entries.map((entry) => ({ url: entry.url })),

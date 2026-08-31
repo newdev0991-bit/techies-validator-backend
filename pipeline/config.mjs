@@ -28,6 +28,14 @@ export function validateConfig(c) {
       || !Number.isSafeInteger(s.maxRetries) || s.maxRetries < 0 || s.maxRetries > 2
       || !Number.isSafeInteger(s.timeoutMs) || s.timeoutMs < 1000 || s.timeoutMs > 30000) throw new Error('Search input must have bounded requests/results and a rolling 24-hour window.');
   const allowed = new Set(['maxResults','recent_posts','location_uid','usePeriodFilter','period','maxPages','maxRequests','pageSize','maxRetries','timeoutMs']);
+  const contactLimits = { maxAuthorRequests: [0, 40], authorTimeoutMs: [1000, 30000],
+    googleFallbackBudgetMs: [10000, 90000], googleSearchTimeoutMs: [5000, 20000] };
+  for (const [key, [min, max]] of Object.entries(contactLimits)) {
+    allowed.add(key);
+    if (s[key] !== undefined && (!Number.isSafeInteger(s[key]) || s[key] < min || s[key] > max)) throw new Error(`Invalid ${key}.`);
+  }
+  allowed.add('includeGoogleFallback');
+  if (s.includeGoogleFallback !== undefined && typeof s.includeGoogleFallback !== 'boolean') throw new Error('Invalid includeGoogleFallback.');
   if (Object.keys(s).some(k => !allowed.has(k))) throw new Error('Unsupported search input field.');
   if (!positive(c.searchRun?.timeout, 300) || ![128,256,512,1024].includes(c.searchRun?.memory)
       || !positive(c.searchRun?.maxTotalChargeUsd, 5) || !positive(c.maxValidationActorChargeUsd, 5)) throw new Error('Run timeout, memory and cost ceilings are required.');

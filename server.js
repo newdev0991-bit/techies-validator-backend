@@ -22,6 +22,7 @@ import {
 import { applyFreshnessPolicy, evaluateLeadFreshness } from './src/freshness.js';
 import { enrichCotContacts, cotLeadWithContacts } from './src/cot-contacts.js';
 import { runGoodLeadContactPhase } from './src/cot-contact-workflow.js';
+import { searchContactsFromLead } from './src/search-author-contacts.js';
 import { cotActorPhaseOptions } from './src/pipeline-capabilities.js';
 import { evaluateCotIdentity, applyCotIdentityPolicy } from './src/cot-identity.js';
 import { pipelineAccess, pipelineActorOptions } from './src/pipeline-capabilities.js';
@@ -588,6 +589,7 @@ async function runFacebookActorBatch(rows, phase = 'proof') {
       requestKey: row.clientRowId,
       url: linkValidation.value,
       lead: normalizedLead,
+      searchAuthor: searchContactsFromLead(row.lead),
       ...(row.contactTarget ? { contactTarget: row.contactTarget } : {})
     };
   });
