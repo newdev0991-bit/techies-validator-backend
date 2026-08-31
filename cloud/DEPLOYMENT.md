@@ -53,3 +53,18 @@
 Do not reset STATE or counters, enable the schedule, or change main to resume.
 The verified runtime build predates this documentation-only checkpoint commit.
 Recheck source code changes and approval limits before a future live canary.
+
+## Source-page repair follow-up - 2026-08-31
+
+The schedule was subsequently enabled outside the preceding deployment work
+and changed to every five minutes. Observed scheduler runs at 09:28, 09:30, and
+09:35 Manila time completed without processing; RESULTS still reported disabled,
+1 historical search and 1 historical validation. Both CONFIG.enabled and the
+Actor's PIPELINE_LIVE_ENABLED remained false, despite Allow processing being on.
+The schedule was paused during diagnosis; its five-minute interval is retained.
+
+The source repair adds a terminal Console status message naming the disabled
+gates, an HTML output report with cumulative counts and lifetime allowances,
+and an explicit output schema plus controller-specific README. It preserves
+all three gates, spending limits, and state history. This repair needs a new
+approved Actor build before it is live; build 0.0.2 remains the tested runtime.

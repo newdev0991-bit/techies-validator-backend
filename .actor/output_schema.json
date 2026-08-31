@@ -1,0 +1,17 @@
+{
+  "actorOutputSchemaVersion": 1,
+  "title": "COT pipeline status and saved results",
+  "properties": {
+    "report": {
+      "type": "string",
+      "title": "Pipeline report",
+      "description": "Explains processing gates, remaining lifetime allowances, and saved lead counts. A paused run is not a new search.",
+      "template": "{{links.apiDefaultKeyValueStoreUrl}}/records/REPORT.html"
+    },
+    "status": {
+      "type": "string",
+      "title": "Status JSON",
+      "template": "{{links.apiDefaultKeyValueStoreUrl}}/records/OUTPUT"
+    }
+  }
+}

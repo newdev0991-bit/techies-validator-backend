@@ -5,6 +5,25 @@ the COT evidence Actor in `actor/`. It runs `cloud/main.mjs` using Node 24.
 The frontend home page reads its saved results; no CSV input is required.
 Manual validation remains available at `/manual` and `/cot`.
 
+## Read the result of a run
+
+Open the run's **Output → Pipeline report** for the actual controller outcome,
+the reasons processing is paused, saved lead counts, and remaining lifetime
+allowances. **Status JSON** exposes the same summary for integrations. These
+are cumulative saved leads, not fresh leads produced by every invocation.
+The controller does not populate the default dataset: its authoritative results
+live in the named state store. An empty dataset is not evidence of no saved leads.
+
+Use the [saved leads dashboard](https://techies-validator-fro-git-d77e22-jehu-zachary-sedillos-projects.vercel.app)
+to view/filter/export the records with your dashboard password. Opening a report
+or the dashboard never starts search or validation.
+
+Checking **Allow processing** is only one of three activation gates. The report
+also names `CONFIG.enabled` and `PIPELINE_LIVE_ENABLED` when they block work.
+Turning all three on cannot override an exhausted lifetime budget. Preserve
+history and approve any increased allowance explicitly; never reset counters.
+Keep the schedule disabled while those gates are off to avoid idle charges.
+
 ## Deployment contract
 
 - Git repository: `newdev0991-bit/techies-validator-backend`, branch

@@ -8,6 +8,7 @@ import { Providers } from '../pipeline/providers.mjs';
 import { validateConfig } from '../pipeline/config.mjs';
 import { CloudLease,CloudState } from './state.mjs';
 import { resultSnapshot } from './results.mjs';
+import { processingGates,controllerReport,publishReport } from './report.mjs';
 
 // No new long-lived Apify secret is needed inside the Actor: use its run token.
 const client=new ApifyClient({token:process.env.APIFY_TOKEN,maxRetries:0,timeoutSecs:30});
@@ -23,7 +24,8 @@ const kv=client.keyValueStore(storeId);
 const queue=client.requestQueue(queueId,{clientKey:process.env.APIFY_ACTOR_RUN_ID});
 const lease=new CloudLease(queue);
 if(!await lease.acquire()) {
-  await defaultStore.setRecord({key:'OUTPUT',value:{status:'busy'}});
+  await publishReport(client,defaultStore,process.env.APIFY_ACTOR_RUN_ID,
+    {status:'busy',message:'Another controller holds the lock. This invocation did not process leads or read a fresh snapshot.'});
 } else {
   let store;
   try {
@@ -38,7 +40,8 @@ if(!await lease.acquire()) {
     const requested=(await kv.getRecord('CONFIG'))?.value || {};
     // Budget settings are operator-managed in named storage, not overrideable in
     // a scheduled or manual run's input. The default is a single bounded canary.
-    const config=validateConfig({...base,...requested,enabled:input.enabled===true && requested.enabled===true && process.env.PIPELINE_LIVE_ENABLED==='true',
+    const gates=processingGates(input,requested,process.env);
+    const config=validateConfig({...base,...requested,enabled:gates.enabled,
       validatorBaseUrl:process.env.COT_VALIDATOR_BASE_URL || base.validatorBaseUrl,
       dataDir:path.join(directory,'data'),outputDir:path.join(directory,'output')});
     if(!config.validatorBaseUrl.startsWith('https://')) throw new Error('CLOUD_VALIDATOR_REQUIRES_HTTPS');
@@ -54,8 +57,9 @@ if(!await lease.acquire()) {
     // One record is the coherent frontend view. Never expose raw responses or credentials.
     if(Buffer.byteLength(JSON.stringify(view))>8*1024*1024) throw new Error('CLOUD_RESULT_SIZE_LIMIT');
     await kv.setRecord({key:'RESULTS',value:view});
-    await defaultStore.setRecord({key:'OUTPUT',value:{...outcome,counts:view.counts,storageId:storeId}});
-    console.log(JSON.stringify({status:outcome.status,counts:view.counts}));
+    const report=controllerReport(outcome,view,config,gates,storeId);
+    await publishReport(client,defaultStore,process.env.APIFY_ACTOR_RUN_ID,report);
+    console.log(JSON.stringify({status:outcome.status,message:report.message,counts:view.counts}));
   } finally {
     store?.close(); await lease.release();
   }
