@@ -63,9 +63,14 @@ One-minute scheduler tick
 The one-minute tick advances an existing cycle. It does not launch a fresh
 Actor every minute. Each query is a separate search, not a comma-separated
 list. Default searches cover the rolling last 24 hours in the UK. Keywords
-in `config.example.json` are editable starter COT queries. A full rotation
-takes six completed cycles, including validation time and cooldowns. These
-bounded searches do not guarantee exhaustive Facebook coverage.
+in `config.example.json` are editable starter COT queries. A full high-intent
+rotation takes six completed cycles, including validation time and cooldowns.
+Search results also pass a deterministic
+pre-validation gate: explicit premises, opening, relocation or ownership evidence
+is required, while personal moves and employment relocation are quarantined as
+`LOW_INTENT_SEARCH_RESULT`. This reduces paid validation and keeps noisy search
+hits out of the lead dashboard without deleting the source audit trail. These
+bounded searches favor precision and do not guarantee exhaustive Facebook coverage.
 
 ## What is written
 

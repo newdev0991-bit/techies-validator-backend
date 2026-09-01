@@ -11,13 +11,13 @@ import { recover } from '../recovery.mjs';
 import { csvCell, exportFiles } from '../exports.mjs';
 import { enrichCotContacts } from '../../src/cot-contacts.js';
 import { pipelineActorOptions, pipelineAccess } from '../../src/pipeline-capabilities.js';
-import { searchLead } from '../records.mjs';
+import { qualifySearchPost, searchLead } from '../records.mjs';
 import { resultSnapshot } from '../../cloud/results.mjs';
 
 const base=JSON.parse(readFileSync(new URL('../config.example.json',import.meta.url)));
 const NOW=Date.parse('2026-08-30T12:00:00Z');
 const post=(id='9007199254740993123')=>({schemaVersion:'facebook-search-posts-v1',post_id:id,
-  url:`https://www.facebook.com/example/posts/${id}`,author:{name:'Synthetic Example'},message:'Opening soon',posted_at:'2026-08-30T11:00:00Z'});
+  url:`https://www.facebook.com/example/posts/${id}`,author:{name:'Synthetic Example'},message:'We are opening our new premises.',posted_at:'2026-08-30T11:00:00Z'});
 function response(payload,mutate=()=>{}) {
   return {success:true,batchId:payload.batchId,results:payload.leads.map(e=>{
     const url=e.lead['Lead Proof URL'];
@@ -77,6 +77,29 @@ test('legacy search rows stay compatible; unknown schemas and malformed IDs rema
   assert.equal(searchLead({ ...post(), author: { name: 'Synthetic', phone: 'untrusted-v1-field' } })['Phone Number'], '');
   assert.throws(() => searchLead({ ...post(), schemaVersion: 'facebook-search-posts-v3' }), /INVALID_SEARCH_POST_ID/);
   assert.throws(() => searchLead({ ...post(), post_id: 123 }), /INVALID_SEARCH_POST_ID/);
+});
+
+test('strict search qualification keeps explicit business events and drops noisy move language', async t => {
+  const keep = [
+    'We are opening our new premises next week.',
+    'Grand opening - our new local shop opens Saturday.',
+    "We've relocated to Beverley - our new address is Unit 5.",
+    'The cafe is under new ownership.'
+  ];
+  const drop = [
+    'I am moving house next week.',
+    'Willing to relocate for the right role.',
+    'Our removals company helps clients relocating abroad.',
+    'New menu launching soon.'
+  ];
+  keep.forEach(message => assert.equal(qualifySearchPost({ message }).qualified, true, message));
+  drop.forEach(message => assert.equal(qualifySearchPost({ message }).qualified, false, message));
+
+  const rows = [post('1'), { ...post('2'), message: drop[0] }, { ...post('3'), message: drop[2] }];
+  const f = fixture(t, rows); await ingest(f);
+  assert.equal(f.s.count(), 1);
+  assert.equal(f.s.db.prepare('SELECT count(*) n FROM quarantine WHERE reason=?').get('LOW_INTENT_SEARCH_RESULT').n, 2);
+  assert.equal(f.s.pending(3).length, 1);
 });
 
 test('author enrichment options remain bounded and preserve explicit disable switches', () => {

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { searchLead, validateResponse, assess } from './records.mjs';
+import { searchLead, qualifySearchPost, validateResponse, assess } from './records.mjs';
 import { exportFiles } from './exports.mjs';
 
 const TERMINAL = new Set(['SUCCEEDED','FAILED','ABORTED','TIMED-OUT']);
@@ -92,10 +92,17 @@ export class Runner {
       if (!Array.isArray(items) || items.length!==limit) return this.halt('DATASET_PAGE_INCOMPLETE');
     } catch (e) { return {status:'dataset_retry',code:safeCode(e)}; }
     const existing=this.s.db.prepare('SELECT 1 FROM leads WHERE id=?');
-    const newIds=new Set(items.filter(post=>typeof post?.post_id==='string' && !existing.get(post.post_id)).map(post=>post.post_id));
+    const newIds=new Set(items.filter(post=>qualifySearchPost(post).qualified
+      && typeof post?.post_id==='string' && !existing.get(post.post_id)).map(post=>post.post_id));
     if (this.s.count()+newIds.size > this.c.maxStoredLeads) return this.halt('STORAGE_LEAD_LIMIT');
     this.s.transaction(()=>{
       items.forEach((post,index)=>{
+        const qualification=qualifySearchPost(post);
+        if(!qualification.qualified) {
+          this.s.db.prepare('INSERT OR IGNORE INTO quarantine VALUES(?,?,?,?)').run(
+            `${cycle.runId}:${cycle.offset+index}`,cycle.runId,JSON.stringify(post),'LOW_INTENT_SEARCH_RESULT');
+          return;
+        }
         try {
           const lead=searchLead(post);
           this.s.insert(post.post_id,cycle.runId,post,lead,this.now());

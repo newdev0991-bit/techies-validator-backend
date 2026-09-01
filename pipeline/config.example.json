@@ -4,7 +4,14 @@
   "validatorBaseUrl": "https://techies-validator-backend-i71b.onrender.com",
   "tickSeconds": 60,
   "searchIntervalSeconds": 300,
-  "queries": ["opening soon", "new premises", "we are moving", "relocating", "under new management", "new owner"],
+  "queries": [
+    "our new premises",
+    "opening our new location",
+    "we have moved to our new premises",
+    "we've relocated to our new premises",
+    "now open at our new location",
+    "under new ownership"
+  ],
   "searchInput": {
     "maxResults": 40,
     "recent_posts": true,

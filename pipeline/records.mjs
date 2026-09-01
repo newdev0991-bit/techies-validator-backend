@@ -4,6 +4,28 @@ import { evaluateLeadFreshness } from '../src/freshness.js';
 import { evaluateCotIdentity } from '../src/cot-identity.js';
 import { searchAuthorContacts } from '../src/search-author-contacts.js';
 
+const normalizeCaption = value => (typeof value === 'string' ? value : '')
+  .slice(0, 10000).toLowerCase().replace(/[’‘]/g, "'");
+
+export function qualifySearchPost(post) {
+  const caption = normalizeCaption(post?.message);
+  if (!caption) return { qualified: false, reason: 'missing_caption' };
+
+  // These phrases overwhelmingly described people, housing or employment in the
+  // observed search sample. They are safe to remove before paid validation.
+  const personal = /\b(?:willing to relocate|looking to relocate|open to relocat|seeking (?:a |an )?(?:job|role)|job search|curriculum vitae|cv\b|resume\b|moving (?:house|home)|i am moving|i'm moving|moving to (?:the|a) area)\b/.test(caption);
+  if (personal) return { qualified: false, reason: 'personal_or_employment_move' };
+
+  const signals = {
+    premises: /\b(?:our|the|brand new|new)\s+premises\b|\bpremises (?:are|is) (?:now )?open\b/.test(caption),
+    opening: /\b(?:grand opening|soft opening|opening our (?:doors|shop|store|salon|clinic|studio|restaurant|cafe|business|new location)|(?:we(?:'re| are)|our (?:shop|store|salon|clinic|studio|restaurant|cafe|business) is) opening|until we open|we are now open|now open at)\b/.test(caption),
+    relocation: /\b(?:we(?:'ve| have) (?:now )?(?:moved|relocated)|we are moving to our new (?:location|premises|address)|relocated to [^.\n]{0,80}(?:our new address|new premises)|moving (?:our|the) (?:business|shop|store|salon|clinic|studio|restaurant|cafe|office)|new business address)\b/.test(caption),
+    ownership: /\b(?:under new ownership|under new management|new owners? (?:of|at)|taken over (?:the|by))\b/.test(caption)
+  };
+  const signal = Object.keys(signals).find(key => signals[key]);
+  return signal ? { qualified: true, signal } : { qualified: false, reason: 'no_explicit_business_event' };
+}
+
 export function searchLead(post) {
   if (!['facebook-search-posts-v1', 'facebook-search-posts-v2'].includes(post?.schemaVersion) || typeof post.post_id !== 'string'
       || !/^[A-Za-z0-9_:-]{1,100}$/.test(post.post_id)) throw new Error('INVALID_SEARCH_POST_ID');
