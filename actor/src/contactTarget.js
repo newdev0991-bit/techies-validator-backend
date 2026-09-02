@@ -31,11 +31,33 @@ export function sameVerifiedBusiness(raw, name) {
         && key(name).length >= 4 && key(raw.postAuthor || raw.pageName) === key(name);
 }
 
+// Expand only an already literal self-claim into its immediate proof context.
+// Do not search disconnected paragraphs or replace a missing/invented model quote.
+export function identityProofQuote(raw, claim = {}) {
+    const caption = typeof raw?.postText === 'string' ? raw.postText : '';
+    const quote = proofQuote(caption, claim?.evidenceQuote);
+    if (quote.length < 12 || quote.length > 500 || event.test(quote) ||
+        claim?.relationship !== 'self' || !sameVerifiedBusiness(raw, claim.businessName) ||
+        raw.scrape.blocked || raw.scrape.loginRequired || raw.scrape.notFound) return quote;
+    const paragraphs = [...caption.matchAll(/[^\r\n]+(?:\r?\n(?!\s*\r?\n)[^\r\n]+)*/g)];
+    const start = caption.indexOf(quote);
+    const index = paragraphs.findIndex(p => p.index <= start && p.index + p[0].length >= start + quote.length);
+    if (index < 0) return quote;
+    for (const end of [index, index + 1]) {
+        const next = paragraphs[end];
+        if (!next) continue;
+        const context = caption.slice(paragraphs[index].index, next.index + next[0].length);
+        const named = (` ${contactNameKey(context)} `).includes(` ${contactNameKey(claim.businessName)} `);
+        if (context.length <= 500 && named && selfEvent.test(context)) return context;
+    }
+    return quote;
+}
+
 export function contactTargetFromProof(raw, claim = {}) {
     if (!claim || typeof claim !== 'object') return null;
     const caption = typeof raw?.postText === 'string' ? raw.postText : '';
     const name = String(claim.businessName || '').trim();
-    const quote = proofQuote(caption, String(claim.evidenceQuote || '').trim());
+    const quote = identityProofQuote(raw, claim);
     const requestedLocation = String(claim.locationQuote || '').trim();
     const location = requestedLocation ? proofQuote(caption, requestedLocation) : '';
     if (raw?.scrape?.success !== true || raw.time_target_matched !== true ||

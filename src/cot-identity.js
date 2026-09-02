@@ -1,5 +1,5 @@
 import { normalizeLead } from './card-data.js';
-import { resolvedContactTarget, proofQuote, sameVerifiedBusiness } from '../actor/src/contactTarget.js';
+import { resolvedContactTarget, proofQuote, sameVerifiedBusiness, identityProofQuote } from '../actor/src/contactTarget.js';
 
 const text = value => typeof value === 'string' ? value.trim() : '';
 const nameKey = value => text(value).normalize('NFKD').toLowerCase()
@@ -20,7 +20,8 @@ export function evaluateCotIdentity(lead = {}, claim = {}) {
     evidenceQuote: target.evidenceQuote, locationQuote: target.locationQuote, requiresManualReview: false,
     reason: 'The business named in the exact proof has independently matched contact-source evidence.' };
   const imported = Boolean(lead['Search Post ID']);
-  const quoted = proofQuote(caption, text(claim?.evidenceQuote));
+  const originalQuote = proofQuote(caption, text(claim?.evidenceQuote));
+  const quoted = identityProofQuote(raw, claim);
   const businessName = text(claim?.businessName);
   const quotePresent = quoted.length >= 12 && quoted.length <= 500 && caption.includes(quoted);
   const taggedNames = [...caption.matchAll(/([A-Z][\p{L}\p{N}'’&.-]*(?:[ \t]+[A-Z][\p{L}\p{N}'’&.-]*){0,5})[ \t]*\(@[a-zA-Z0-9_.]+\)/gu)].map(m => m[1]);
@@ -44,6 +45,8 @@ export function evaluateCotIdentity(lead = {}, claim = {}) {
     businessName: status === 'matched' ? company : businessName,
     relationship: thirdParty ? 'third_party' : status === 'matched' ? 'self' : 'unknown',
     evidenceQuote: quotePresent ? quoted : '', locationQuote: text(claim?.locationQuote),
+    ...(quotePresent && quoted !== originalQuote ? { evidenceSelection: {
+      method: 'adjacent-proof-context', originalQuote, selectedQuote: quoted } } : {}),
     requiresManualReview: !['matched', 'not_required'].includes(status), reason };
 }
 

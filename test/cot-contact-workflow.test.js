@@ -137,3 +137,26 @@ test('two-stage run caps sum to the existing batch allowance and duration; no un
   assert.equal(buildCotActorInput([], { phase: 'proof' }).includeGoogleFallback, false);
   assert.equal(buildCotActorInput([], { phase: 'proof' }).includeContactDetails, false);
 });
+
+test('short self quote recovers existing verified contacts without a paid call and preserves quality/freshness gates', async () => {
+  const row = fixture();
+  row.fetchResults.rawData.postText = "We've got a new home!\n\nWe're opening our new premises as the permanent home of Synthetic Publisher.";
+  const quality = { verdict: 'GOOD', reasoning: 'New permanent premises.', needs_manual_review: false,
+    business_identity: { relationship: 'self', businessName: 'Synthetic Publisher', evidenceQuote: "We've got a new home!" } };
+  row.analysis = finalizeCotAnalysis({ ...row.lead, fetchResults: row.fetchResults }, quality);
+  const original = JSON.stringify(row.analysis.quality_assessment);
+  const [completed] = await runGoodLeadContactPhase([row], { finalize: finalizeCotAnalysis,
+    scrape: async () => assert.fail('Existing verified contacts must be reused') });
+  assert.equal(assess(completed, Date.now()).status, 'READY');
+  assert.equal(JSON.stringify(completed.analysis.quality_assessment), original);
+  for (const [change, expected] of [
+    [r => { r.analysis.quality_assessment.verdict = 'BAD'; }, 'REJECTED'],
+    [r => { r.analysis.quality_assessment.needs_manual_review = true; }, 'REVIEW_REQUIRED'],
+    [r => { r.fetchResults.rawData.address.full = ''; }, 'REVIEW_REQUIRED'],
+    [r => { r.fetchResults.rawData.address.conflict = true; }, 'REVIEW_REQUIRED'],
+    [r => { r.fetchResults.rawData.posted_at_iso = new Date(Date.now() - 25 * 3600000).toISOString(); }, 'EXPIRED'],
+  ]) {
+    const altered = structuredClone(completed); change(altered);
+    assert.equal(assess(altered, Date.now()).status, expected);
+  }
+});
