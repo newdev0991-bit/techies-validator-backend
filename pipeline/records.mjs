@@ -40,20 +40,24 @@ export function validateResponse(payload, expected) {
 
 export function assess(row, now) {
   const lead = { ...row.lead, fetchResults: row.fetchResults };
-  const identity = evaluateCotIdentity(lead, row.analysis.business_identity);
+  const analysis = row.analysis;
+  // Retained model evidence precedes the old deterministic policy result. Reapply
+  // current proof/contact rules without treating yesterday's policy warning as
+  // a new model decision or changing the original validation timestamp.
+  const quality = analysis.quality_assessment || analysis;
+  const identity = evaluateCotIdentity(lead, quality.business_identity || analysis.business_identity);
   const contacts = enrichCotContacts(lead, identity);
   // Re-evaluate the real proof evidence. Neither search dates nor an AI verdict
   // can promote an unproven timestamp to delivery-ready.
   const freshness = evaluateLeadFreshness(lead, { now: new Date(now) });
-  const analysis = row.analysis;
   const event = qualifySearchPost({ message: lead.fetchResults?.rawData?.postText });
   const excludedEvent = ['historical_event_only', 'personal_or_employment_move', 'recruitment_only'].includes(event.reason);
-  const qualityVerdict = excludedEvent ? 'BAD' : analysis.quality_assessment?.verdict || analysis.verdict;
-  const ready = !excludedEvent && analysis.verdict === 'GOOD' && analysis.needs_manual_review === false
+  const qualityVerdict = excludedEvent ? 'BAD' : quality.verdict;
+  const ready = !excludedEvent && qualityVerdict === 'GOOD' && quality.needs_manual_review === false
     && freshness.decision === 'fresh' && !freshness.requiresManualReview
     && contacts.status === 'complete' && !contacts.requiresManualReview && !identity.requiresManualReview;
   return { status: qualityVerdict === 'BAD' ? 'REJECTED' : freshness.autoRejectEligible ? 'EXPIRED' : ready ? 'READY' : 'REVIEW_REQUIRED',
-    contacts, freshness, identity, verdict: excludedEvent ? 'BAD' : analysis.verdict, qualityVerdict,
-    reason: `${excludedEvent ? `Event excluded: ${event.reason}. ` : ''}${analysis.reasoning || ''} [Freshness: ${freshness.reasonCode}; contacts: ${contacts.status}; business identity: ${identity.status}]`,
+    contacts, freshness, identity, verdict: qualityVerdict, qualityVerdict,
+    reason: `${excludedEvent ? `Event excluded: ${event.reason}. ` : ''}${quality.reasoning || analysis.reasoning || ''} [Freshness: ${freshness.reasonCode}; contacts: ${contacts.status}; business identity: ${identity.status}]`,
     validatedAt: new Date(now).toISOString(), response: row };
 }

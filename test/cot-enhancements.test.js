@@ -69,3 +69,13 @@ test('24-hour boundary separates expiration from quality rejection and never ref
   row.analysis.verdict='BAD';assert.equal(assess(row,boundary+1).status,'REJECTED');
   row.analysis.verdict='GOOD';raw.time_target_matched=false;assert.equal(assess(row,boundary+1).status,'REVIEW_REQUIRED');
 });
+
+test('saved policy warnings are recomputed from retained original model evidence without overriding model uncertainty',()=>{
+  const {raw,lead}=evidence('SE Medical','We’ve moved to our new premises!\n16A Bridge Street, Banchory AB31 5SX');
+  const original={verdict:'GOOD',needs_manual_review:false,business_identity:{businessName:'SE Medical',relationship:'self',evidenceQuote:"We've moved to our new premises!"}};
+  const row={lead,fetchResults:lead.fetchResults,analysis:{quality_assessment:original,verdict:'UNCLEAR',needs_manual_review:true,business_identity:{evidenceQuote:'',status:'unresolved'}}};
+  const before=structuredClone(row),clock=Date.parse(raw.posted_at_iso)+3600000;
+  assert.equal(assess(row,clock).status,'READY');assert.deepEqual(row,before);
+  row.analysis.quality_assessment.needs_manual_review=true;assert.equal(assess(row,clock).status,'REVIEW_REQUIRED');
+  row.analysis.quality_assessment.verdict='BAD';assert.equal(assess(row,clock).status,'REJECTED');
+});

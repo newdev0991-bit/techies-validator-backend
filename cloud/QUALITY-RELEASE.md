@@ -61,11 +61,13 @@ no paid requests. Synthetic regressions cover the named observed failures.
 
 The 74-row saved sample, evaluated at 2026-09-02T17:03:03.646Z, originally contained
 6 Ready, 38 Review and 30 Rejected at their individual validation times. Local replay
-produced 0 Ready, 37 Expired, 3 Review and 34 Rejected at the fixed snapshot clock.
+produced 1 Ready, 37 Expired, 2 Review and 34 Rejected at the fixed snapshot clock.
 This is reclassification, not a new validation or an increase in live yield.
 
 - SE Medical: normalized literal apostrophe quote and retained multiline address.
-- Deeside Kilts: extracted the `premises @ 16A Bridge Street` address.
+- Deeside Kilts: extracted the `premises @ 16A Bridge Street` address and recovered
+  Ready at the fixed snapshot clock by reapplying deterministic rules to the retained
+  original quality evidence. Its original Review-at-validation history is unchanged.
 - Corinium: corroborated the legal-name variant but preserved conflicting addresses.
 - Galloway Jennings and Daisy Bonny & Beau: retained their opening announcements.
 - Surrey Family Vets: excluded its anniversary-only retrospective.
