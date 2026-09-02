@@ -2,6 +2,7 @@ import { normalizeLead } from './card-data.js';
 import { isSuccessfulFacebookScrape, validateFacebookUrl } from './validation.js';
 import { normalizeUkContactPhone } from '../actor/src/contactValues.js';
 import { searchContactsFromLead } from './search-author-contacts.js';
+import { proofAddresses, addressesAgree } from '../actor/src/proofAddress.js';
 export { normalizeUkContactPhone } from '../actor/src/contactValues.js';
 
 const text = value => typeof value === 'string' ? value.trim() : '';
@@ -62,6 +63,22 @@ export function enrichCotContacts(lead = {}, businessIdentity) {
      (/^google-official-website-(?:structured|address)$/.test(address.source || '') && address.identityStatus === 'matched' && addressUrl));
   const fullAddress = field(addressAllowed ? text(address.full) : '',
     submitted.address, text(address.source), addressUrl);
+  const proofCandidates = usable && businessIdentity?.status === 'matched' && businessIdentity.relationship !== 'third_party'
+    && raw.time_target_matched === true ? proofAddresses(raw.postText) : [];
+  fullAddress.candidates = proofCandidates.map(c => ({ ...c, sourceUrl: input.value, source: 'facebook-post-contact' }));
+  if (fullAddress.value) fullAddress.candidates.push({ value: fullAddress.value, sourceUrl: addressUrl, source: address.source });
+  if(usable && businessIdentity?.status==='matched' && businessIdentity.relationship!=='third_party' && Array.isArray(address.candidates)) {
+    for(const candidate of address.candidates.slice(0,5)) {
+      const url=sourceUrl(candidate.sourceUrl),value=text(candidate.value);
+      if(url && value && !fullAddress.candidates.some(c=>c.value===value && c.sourceUrl===url))
+        fullAddress.candidates.push({value,sourceUrl:url,source:text(candidate.source)});
+    }
+  }
+  fullAddress.conflict ||= address.conflict === true || proofCandidates.length > 1
+    || Boolean(fullAddress.value && proofCandidates.some(c => !addressesAgree(c.value, fullAddress.value)));
+  if (!fullAddress.value && proofCandidates.length === 1 && !fullAddress.conflict) {
+    Object.assign(fullAddress, field(proofCandidates[0].value, submitted.address, 'facebook-post-contact', input.value, value => value.toLowerCase().replace(/\s+/g, ' ')));
+  }
   // Derive a postcode only from the observed address, never a submitted fallback.
   const postcode = fullAddress.value.match(/\b(?:GIR\s?0AA|[A-Z]{1,2}\d[A-Z\d]?\s?\d[A-Z]{2})\b/i)?.[0]
     ?.toUpperCase().replace(/\s+/g, '').replace(/(.{3})$/, ' $1') || '';
@@ -83,7 +100,7 @@ export function enrichCotContacts(lead = {}, businessIdentity) {
       ...(!sameRow ? ['Contact evidence is missing or belongs to a different proof URL.'] : []),
       ...(!phone.value ? ['No verified UK business phone was found.'] : []),
       ...(!fullAddress.value ? ['No verified business address was found.'] : []),
-      ...(conflicts ? ['Observed contact details differ from the submitted lead; review before export.'] : [])
+      ...(conflicts ? ['Contact sources disagree or differ from the submitted lead; review before export.'] : [])
     ]
   };
 }

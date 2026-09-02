@@ -3,7 +3,7 @@ WORKDIR /usr/src/app
 COPY package*.json ./
 RUN npm ci --omit=dev --ignore-scripts
 COPY src ./src
-COPY actor/src/contactTarget.js actor/src/contactValues.js ./actor/src/
+COPY actor/src/contactTarget.js actor/src/contactValues.js actor/src/proofAddress.js ./actor/src/
 COPY pipeline ./pipeline
 COPY cloud ./cloud
 RUN node --check cloud/main.mjs && node --test cloud/test/*.test.mjs

@@ -25,6 +25,7 @@ import { runGoodLeadContactPhase } from './src/cot-contact-workflow.js';
 import { searchContactsFromLead } from './src/search-author-contacts.js';
 import { cotActorPhaseOptions } from './src/pipeline-capabilities.js';
 import { evaluateCotIdentity, applyCotIdentityPolicy } from './src/cot-identity.js';
+import { qualifySearchPost } from './src/cot-events.js';
 import { pipelineAccess, pipelineActorOptions } from './src/pipeline-capabilities.js';
 import {
   InvalidProviderResponseError,
@@ -425,6 +426,10 @@ async function analyzeLead(lead) {
 }
 
 export function finalizeCotAnalysis(lead, aiResponse) {
+  const event = qualifySearchPost({message:lead.fetchResults?.rawData?.postText});
+  if (['historical_event_only','personal_or_employment_move','recruitment_only'].includes(event.reason)) {
+    aiResponse={...aiResponse,verdict:'BAD',needs_manual_review:false,reasoning:`Event excluded: ${event.reason}. ${aiResponse.reasoning || ''}`};
+  }
   const freshnessData = evaluateLeadFreshness(lead, {
     leadDateOrder: configuredLeadDateOrder()
   });

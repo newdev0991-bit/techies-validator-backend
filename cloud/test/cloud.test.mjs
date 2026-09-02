@@ -7,12 +7,26 @@ import {Store} from '../../pipeline/store.mjs';
 import {Runner} from '../../pipeline/runner.mjs';
 import {CloudState,CloudLease} from '../state.mjs';
 import {resultSnapshot} from '../results.mjs';
+import {keywordMetrics,pipelineDiagnostics} from '../diagnostics.mjs';
 import {readSnapshot,migrationPlan,initializeStorage,scheduleDefinition} from '../setup.mjs';
 
 const base=JSON.parse(readFileSync(new URL('../../pipeline/config.canary.example.json',import.meta.url)));
 function store(t){const dir=mkdtempSync(path.join(os.tmpdir(),'cot-cloud-test-'));const s=new Store(dir);t.after(()=>s.close());return {s,dir};}
 function remote(){const records=new Map();return {records,async getRecord(k){return records.has(k)?{value:structuredClone(records.get(k))}:undefined;},async setRecord({key,value}){records.set(key,structuredClone(value));}};}
 const lease={async assert(){}};
+
+test('keyword aggregates preserve historical yield and unknown costs; all blockers stay visible',t=>{
+  const row={query:'our new premises',raw:3,filtered:1,duplicates:0,retained:2,validated:2,readyAtValidation:1,unresolvedContacts:1,knownSearchCostUsd:0.01};
+  const [group]=keywordMetrics([row,{...row,knownSearchCostUsd:null,duplicates:null}]);
+  assert.equal(group.cycles,2);assert.equal(group.readyAtValidation,2);assert.equal(group.validated,4);
+  assert.equal(group.smallSample,true);assert.equal(group.knownSearchCostUsd,null);assert.equal(group.duplicates,null);
+  const {s}=store(t);for(let i=0;i<8;i++)s.charge('2026-09-03','searches');
+  s.set('halted',{code:'REPEATED_INCOMPLETE_SEARCHES'});
+  const diagnostics=pipelineDiagnostics(s,{maxSearchRunsTotal:8,maxSearchRunsPerDay:3},
+    {blockers:['Input Allow processing is off','CONFIG.enabled is not true']},Date.parse('2026-09-03T12:00:00Z'));
+  assert.equal(diagnostics.blockers.length,5);assert.equal(diagnostics.budgets.searches.remaining,0);
+  assert.equal(diagnostics.nextEligibleSearchAt,null);
+});
 
 test('cloud checkpoints preserve dedup, counters, pending work and resume identity across new containers',async t=>{
   const {s}=store(t);s.insert('123','run','synthetic',{ 'Company Name':'Synthetic'},100);s.charge('2026-08-30','searches');s.set('cycle',{phase:'searching',runId:'same-run'});

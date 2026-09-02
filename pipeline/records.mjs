@@ -4,27 +4,8 @@ import { evaluateLeadFreshness } from '../src/freshness.js';
 import { evaluateCotIdentity } from '../src/cot-identity.js';
 import { searchAuthorContacts } from '../src/search-author-contacts.js';
 
-const normalizeCaption = value => (typeof value === 'string' ? value : '')
-  .slice(0, 10000).toLowerCase().replace(/[’‘]/g, "'");
-
-export function qualifySearchPost(post) {
-  const caption = normalizeCaption(post?.message);
-  if (!caption) return { qualified: false, reason: 'missing_caption' };
-
-  // These phrases overwhelmingly described people, housing or employment in the
-  // observed search sample. They are safe to remove before paid validation.
-  const personal = /\b(?:willing to relocate|looking to relocate|open to relocat|seeking (?:a |an )?(?:job|role)|job search|curriculum vitae|cv\b|resume\b|moving (?:house|home)|i am moving|i'm moving|moving to (?:the|a) area)\b/.test(caption);
-  if (personal) return { qualified: false, reason: 'personal_or_employment_move' };
-
-  const signals = {
-    premises: /\b(?:our|the|brand new|new)\s+premises\b|\bpremises (?:are|is) (?:now )?open\b/.test(caption),
-    opening: /\b(?:grand opening|soft opening|opening our (?:doors|shop|store|salon|clinic|studio|restaurant|cafe|business|new location)|(?:we(?:'re| are)|our (?:shop|store|salon|clinic|studio|restaurant|cafe|business) is) opening|until we open|we are now open|now open at)\b/.test(caption),
-    relocation: /\b(?:we(?:'ve| have) (?:now )?(?:moved|relocated)|we are moving to our new (?:location|premises|address)|relocated to [^.\n]{0,80}(?:our new address|new premises)|moving (?:our|the) (?:business|shop|store|salon|clinic|studio|restaurant|cafe|office)|new business address)\b/.test(caption),
-    ownership: /\b(?:under new ownership|under new management|new owners? (?:of|at)|taken over (?:the|by))\b/.test(caption)
-  };
-  const signal = Object.keys(signals).find(key => signals[key]);
-  return signal ? { qualified: true, signal } : { qualified: false, reason: 'no_explicit_business_event' };
-}
+import { qualifySearchPost } from '../src/cot-events.js';
+export { qualifySearchPost } from '../src/cot-events.js';
 
 export function searchLead(post) {
   if (!['facebook-search-posts-v1', 'facebook-search-posts-v2'].includes(post?.schemaVersion) || typeof post.post_id !== 'string'
@@ -65,11 +46,14 @@ export function assess(row, now) {
   // can promote an unproven timestamp to delivery-ready.
   const freshness = evaluateLeadFreshness(lead, { now: new Date(now) });
   const analysis = row.analysis;
-  const ready = analysis.verdict === 'GOOD' && analysis.needs_manual_review === false
+  const event = qualifySearchPost({ message: lead.fetchResults?.rawData?.postText });
+  const excludedEvent = ['historical_event_only', 'personal_or_employment_move', 'recruitment_only'].includes(event.reason);
+  const qualityVerdict = excludedEvent ? 'BAD' : analysis.quality_assessment?.verdict || analysis.verdict;
+  const ready = !excludedEvent && analysis.verdict === 'GOOD' && analysis.needs_manual_review === false
     && freshness.decision === 'fresh' && !freshness.requiresManualReview
     && contacts.status === 'complete' && !contacts.requiresManualReview && !identity.requiresManualReview;
-  return { status: ready ? 'READY' : analysis.verdict === 'BAD' || freshness.autoRejectEligible ? 'REJECTED' : 'REVIEW_REQUIRED',
-    contacts, freshness, identity, verdict: analysis.verdict,
-    reason: `${analysis.reasoning || ''} [Freshness: ${freshness.reasonCode}; contacts: ${contacts.status}; business identity: ${identity.status}]`,
+  return { status: qualityVerdict === 'BAD' ? 'REJECTED' : freshness.autoRejectEligible ? 'EXPIRED' : ready ? 'READY' : 'REVIEW_REQUIRED',
+    contacts, freshness, identity, verdict: excludedEvent ? 'BAD' : analysis.verdict, qualityVerdict,
+    reason: `${excludedEvent ? `Event excluded: ${event.reason}. ` : ''}${analysis.reasoning || ''} [Freshness: ${freshness.reasonCode}; contacts: ${contacts.status}; business identity: ${identity.status}]`,
     validatedAt: new Date(now).toISOString(), response: row };
 }

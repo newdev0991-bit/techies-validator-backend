@@ -14,7 +14,7 @@ are cumulative saved leads, not fresh leads produced by every invocation.
 The controller does not populate the default dataset: its authoritative results
 live in the named state store. An empty dataset is not evidence of no saved leads.
 
-Use the [saved leads dashboard](https://techies-validator-fro-git-d77e22-jehu-zachary-sedillos-projects.vercel.app)
+Use the [saved leads dashboard](https://techies-validator-fro-git-679e6d-jehu-zachary-sedillos-projects.vercel.app)
 to view/filter/export the records with your dashboard password. Opening a report
 or the dashboard never starts search or validation.
 
@@ -27,7 +27,7 @@ Keep the schedule disabled while those gates are off to avoid idle charges.
 ## Deployment contract
 
 - Git repository: `newdev0991-bit/techies-validator-backend`, branch
-  `codex/apify-cot-cloud-pipeline`, **repository root**, `.actor/actor.json`.
+  `codex/strict-good-lead-contacts`, **repository root**, `.actor/actor.json`.
 - New private Actor name: `techies-cot-cloud-pipeline`.
 - Existing search Actor: `53bGXKeIhVmNMTCi4`; existing COT Actor:
   `J8wBqFJa8GQo9RJ5J`. Do not replace either with the controller image.
@@ -81,7 +81,7 @@ never use it against an active controller or to overwrite existing state.
 
 ## Frontend connection
 
-The frontend branch `codex/apify-cot-cloud-results` requires server-only values:
+The frontend branch `codex/strict-good-lead-contacts` requires server-only values:
 
 - `COT_PIPELINE_STORE_ID`: the named store ID above.
 - `COT_PIPELINE_READ_TOKEN`: a token scoped to read this store, where supported.
@@ -89,8 +89,10 @@ The frontend branch `codex/apify-cot-cloud-results` requires server-only values:
 
 The browser sends the password only to its own `/api/cot-pipeline` route.
 The route reads `RESULTS` with the server credential; it never starts an Actor.
-Results are not cached, raw provider responses are withheld, and expired READY
-proofs become review-required on every read, including CSV downloads.
+Results are not cached and raw provider responses are withheld. Version 2 separates
+conclusively stale non-BAD evidence into EXPIRED on every read and CSV download.
+BAD quality stays REJECTED; uncertain dates stay REVIEW_REQUIRED. Version 1 remains
+readable with its conservative legacy expiry behavior until the controller updates.
 Do not use `NEXT_PUBLIC_` for any of these settings. If using a shared password,
 put deployment access protection/rate limiting in front of the dashboard.
 

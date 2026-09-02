@@ -13,6 +13,7 @@ import { enrichCotContacts } from '../../src/cot-contacts.js';
 import { pipelineActorOptions, pipelineAccess } from '../../src/pipeline-capabilities.js';
 import { qualifySearchPost, searchLead } from '../records.mjs';
 import { resultSnapshot } from '../../cloud/results.mjs';
+import { searchOutcome } from '../search-outcome.mjs';
 
 const base=JSON.parse(readFileSync(new URL('../config.example.json',import.meta.url)));
 const NOW=Date.parse('2026-08-30T12:00:00Z');
@@ -45,6 +46,72 @@ function fixture(t,rows=[post()]) {
   return {c,s,p,runner,calls,advance:(ms)=>{clock+=ms;},now:()=>clock};
 }
 async function ingest(f){assert.equal((await f.runner.tick()).status,'search_started');assert.equal((await f.runner.tick()).status,'search_ingested');}
+
+test('cloud snapshots and operational exports preserve validation history across expiry',async t=>{
+  const f=fixture(t);await ingest(f);await f.runner.tick();await f.runner.tick();
+  const original=f.s.snapshot(),validatedAt=JSON.parse(f.s.rows()[0].result).validatedAt;
+  const boundary=Date.parse('2026-08-31T11:00:00Z');
+  for(const clock of [boundary-1,boundary,boundary+1]) {
+    const view=resultSnapshot(f.s,clock,true,f.c);
+    assert.equal(view.schemaVersion,'cot-cloud-results-v2');
+    assert.equal(view.rows[0].status,clock>boundary?'EXPIRED':'READY');
+    assert.equal(view.rows[0].validatedAt,validatedAt);
+    assert.equal(view.rows[0].validationStatus,'READY');
+    assert.equal(view.runMetrics[0].readyAtValidation,1);
+    const exported=await exportFiles(f.s,f.c.outputDir,clock);
+    assert.equal(exported.counts.expired,clock>boundary?1:0);
+    assert.equal(exported.counts.enriched,clock>boundary?0:1);
+  }
+  assert.deepEqual(f.s.snapshot(),original);
+});
+
+test('corrupt search rows halt before paid validation',async t=>{
+  const f=fixture(t,[{...post(),schemaVersion:'unrecognized'}]);
+  await f.runner.tick();assert.equal((await f.runner.tick()).code,'INVALID_SEARCH_DATASET');
+  await f.runner.tick();assert.equal(f.calls.validate,0);
+});
+
+test('bounded partial cycles continue without reporting completeness or bypassing lifetime limits',async t=>{
+  const f=fixture(t);f.c.maxSearchRunsTotal=3;
+  f.p.run=async()=>({id:'run1',actId:f.c.actorId,status:'FAILED',defaultDatasetId:'dataset1',defaultKeyValueStoreId:'kv1'});
+  f.p.summary=async()=>({schemaVersion:'facebook-search-run-v1',query:f.s.get('cycle').input.query,success:false,partial:true,firstPageAccepted:true,
+    resultCount:1,pageCount:f.c.searchInput.maxPages,requestCount:f.c.searchInput.maxRequests,stoppingReason:'PAGE_BUDGET_EXHAUSTED'});
+  for(let i=0;i<3;i++){
+    await ingest(f);if(i===0) await f.runner.tick();
+    const done=await f.runner.tick();assert.equal(done.searchOutcome,'bounded_partial');
+    assert.equal(f.s.get('incompleteSearches'),0);f.advance(300000);
+  }
+  assert.equal((await f.runner.tick()).status,'total_search_limit');assert.equal(f.calls.start,3);
+  const metric=resultSnapshot(f.s,f.now(),true,f.c).runMetrics[0];
+  assert.equal(metric.outcome,'bounded_partial');assert.equal(metric.raw,1);
+});
+
+test('partial classification rejects mismatching or empty evidence',()=>{
+  const input={query:'our new premises',maxPages:3,maxRequests:8,maxResults:20};
+  const cycle={input,total:9,runStatus:'FAILED',summary:{schemaVersion:'facebook-search-run-v1',query:input.query,partial:true,success:false,
+    firstPageAccepted:true,resultCount:9,pageCount:3,requestCount:6,stoppingReason:'PAGE_BUDGET_EXHAUSTED'}};
+  assert.equal(searchOutcome(cycle),'bounded_partial');
+  for(const change of [{query:'wrong'},{resultCount:0},{pageCount:2},{requestCount:9},{firstPageAccepted:false},{stoppingReason:'TIMEOUT'}])
+    assert.equal(searchOutcome({...cycle,summary:{...cycle.summary,...change}}),'failed');
+});
+
+test('recovery dry run verifies provider evidence and apply preserves counters with processing disabled',async t=>{
+  const f=fixture(t);f.c.enabled=false;f.c.maxSearchRunsTotal=3;
+  const input={...f.c.searchInput,query:'our new premises'};
+  const summary={schemaVersion:'facebook-search-run-v1',query:input.query,partial:true,success:false,firstPageAccepted:true,
+    resultCount:1,pageCount:input.maxPages,requestCount:input.maxRequests,stoppingReason:'PAGE_BUDGET_EXHAUSTED'};
+  for(let i=0;i<3;i++){f.s.charge('2026-09-01','searches');f.s.auditRun({id:`cycle${i}`,runId:`run${i}`,input,total:1,createdAt:i,completedAt:i,
+    datasetId:`data${i}`,kvId:`kv${i}`,runStatus:'FAILED',summary});}
+  f.s.set('incompleteSearches',3);f.s.set('halted',{code:'REPEATED_INCOMPLETE_SEARCHES'});
+  f.p.run=async id=>({id,actId:f.c.actorId,status:'FAILED',defaultDatasetId:`data${id.slice(-1)}`,defaultKeyValueStoreId:`kv${id.slice(-1)}`});
+  f.p.input=async()=>input;f.p.summary=async()=>summary;f.p.dataset=async()=>({itemCount:1});
+  const before=f.s.snapshot();const report=await recover('recover-bounded-searches',[],f.c,f.s,f.p);
+  assert.equal(report.eligible,true);assert.deepEqual(f.s.snapshot(),before);
+  f.s.set('batch',{phase:'sending'});assert.equal((await recover('recover-bounded-searches',[],f.c,f.s,f.p)).eligible,false);f.s.set('batch',null);
+  await recover('recover-bounded-searches',['--apply'],f.c,f.s,f.p);
+  assert.equal(f.s.get('halted'),null);assert.equal(f.s.totals().searches,3);
+  f.c.enabled=true;assert.equal((await f.runner.tick()).status,'total_search_limit');assert.equal(f.calls.start,0);
+});
 
 test('v2 author contacts survive ingestion, validator payload, cloud snapshot and separate source export without becoming verified', async t => {
   const source = { ...post(), schemaVersion: 'facebook-search-posts-v2', author: {
@@ -98,7 +165,7 @@ test('strict search qualification keeps explicit business events and drops noisy
   const rows = [post('1'), { ...post('2'), message: drop[0] }, { ...post('3'), message: drop[2] }];
   const f = fixture(t, rows); await ingest(f);
   assert.equal(f.s.count(), 1);
-  assert.equal(f.s.db.prepare('SELECT count(*) n FROM quarantine WHERE reason=?').get('LOW_INTENT_SEARCH_RESULT').n, 2);
+  assert.equal(f.s.db.prepare('SELECT count(*) n FROM quarantine WHERE reason LIKE ?').get('LOW_INTENT_SEARCH_RESULT:%').n, 2);
   assert.equal(f.s.pending(3).length, 1);
 });
 
@@ -127,13 +194,13 @@ test('disabled and overlapping workers cannot perform network work',async t=>{
   f.c.enabled=true;const second=new Store(f.c.dataDir);t.after(()=>second.close());assert.equal(second.acquire(),true);
   assert.equal((await f.runner.tick()).status,'busy');assert.equal(f.calls.start,0);second.release();
 });
-test('pending rows and pagination survive new worker instances; bad IDs quarantined',async t=>{
+test('pending rows and pagination survive restart; corrupt IDs are quarantined and halt validation',async t=>{
   const rows=Array.from({length:101},(_,i)=>post(String(i+1)));rows.push({...post(),post_id:123});
   const f=fixture(t,rows);await f.runner.tick();assert.equal((await f.runner.tick()).status,'ingesting');
   const second=new Store(f.c.dataDir);t.after(()=>second.close());const r=new Runner(f.c,second,f.p,{now:f.now});
-  assert.equal((await r.tick()).status,'search_ingested');assert.deepEqual(f.calls.items,[0,100]);
+  assert.equal((await r.tick()).code,'INVALID_SEARCH_DATASET');assert.deepEqual(f.calls.items,[0,100]);
   assert.equal(second.count(),101);assert.equal(second.db.prepare('SELECT count(*) n FROM quarantine').get().n,1);
-  assert.equal((await r.tick()).status,'validated');assert.equal(f.calls.start,1);
+  assert.equal((await r.tick()).status,'halted');assert.equal(f.calls.start,1);assert.equal(f.calls.validate,0);
 });
 test('failed partial search retains rows and audit; failed empty run is incomplete',async t=>{
   for(const rows of [[post()],[]]){
@@ -190,7 +257,7 @@ test('unverified contact or search-only date never enters enriched CSV; exports 
   const f=fixture(t,[post('1'),post('2'),post('3')]);await ingest(f);
   f.p.validate=async payload=>response(payload,r=>{if(r.rowIndex===1)delete r.fetchResults.rawData.address.verified;if(r.rowIndex===2)delete r.fetchResults.rawData.posted_at_iso;});
   await f.runner.tick();let status=JSON.parse(readFileSync(path.join(f.c.outputDir,'status.json')));
-  assert.deepEqual(status.counts,{enriched:1,review:2,rejected:0});
+  assert.deepEqual(status.counts,{enriched:1,review:2,rejected:0,expired:0});
   f.advance(86400000);status=await exportFiles(f.s,f.c.outputDir,f.now());assert.equal(status.counts.enriched,0);
   assert.equal(f.calls.validate,0); // replaced provider above; export must not invoke it
 });
@@ -211,7 +278,7 @@ test('old GOOD answers cannot export unresolved or third-party publishers even w
   });
   await f.runner.tick();
   const exported=await exportFiles(f.s,f.c.outputDir,f.now());
-  assert.deepEqual(exported.counts,{enriched:1,review:2,rejected:0});
+  assert.deepEqual(exported.counts,{enriched:1,review:2,rejected:0,expired:0});
   const review=readFileSync(path.join(f.c.outputDir,'review.csv'),'utf8');
   assert.match(review,/business identity: unresolved/);
   assert.match(review,/business identity: third_party/);

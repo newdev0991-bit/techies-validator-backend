@@ -42,6 +42,8 @@ export function cotContactEvidence(output, result) {
         },
         address: {
             ...output.address,
+            conflict: result.addressConflict === true,
+            candidates: result.addressCandidates || [],
             full: addressVerified ? observedAddress : null,
             verified: addressVerified,
             identityStatus: addressVerified ? 'matched' : 'unconfirmed',

@@ -6,7 +6,7 @@ import { searchContactsFromLead } from '../src/search-author-contacts.js';
 
 export const HEADERS = ['Post ID','Company Name','Lead Proof URL','Phone Number','Address 1','Post Code',
   'Phone Evidence URL','Address Evidence URL','AI Verdict','Output Status','Contact Status',
-  'Proof Date','Validated At','Search Run ID','Reason'];
+  'Proof Date','Validated At','Search Run ID','Reason','Quality Verdict','Status At Validation','Freshness Decision','Address Conflict','Address Candidates'];
 
 export function csvCell(value) {
   let s = String(value ?? '');
@@ -24,17 +24,18 @@ async function atomic(file, content) {
 
 export async function exportFiles(store, directory, now) {
   await mkdir(directory, { recursive: true });
-  const groups = { enriched: [], review: [], rejected: [] };
+  const groups = { enriched: [], review: [], rejected: [], expired: [] };
   for (const row of store.rows()) {
     if (row.status !== 'complete') continue;
     const lead = JSON.parse(row.lead); const saved = JSON.parse(row.result);
     // Reclassify freshness on every export; yesterday's GOOD is not today's fresh lead.
     const r = { ...assess(saved.response, now), validatedAt: saved.validatedAt };
     const c = r.contacts;
-    const group = r.status === 'READY' ? 'enriched' : r.status === 'REJECTED' ? 'rejected' : 'review';
+    const group = r.status === 'READY' ? 'enriched' : r.status === 'REJECTED' ? 'rejected' : r.status === 'EXPIRED' ? 'expired' : 'review';
     groups[group].push([row.id, r.identity.status === 'matched' ? r.identity.businessName || lead['Company Name'] : lead['Company Name'], lead['Lead Proof URL'], c.phone.value, c.address.value,
       c.postcode.value, c.phone.sourceUrl, c.address.sourceUrl, r.verdict, r.status, c.status,
-      r.freshness.timestamp, r.validatedAt, row.cycle, r.reason]);
+      r.freshness.timestamp, r.validatedAt, row.cycle, r.reason,r.qualityVerdict,saved.status,r.freshness.decision,c.address.conflict,
+      JSON.stringify(c.address.candidates || [])]);
   }
   for (const [name, rows] of Object.entries(groups)) await atomic(path.join(directory, `${name}.csv`), csv([HEADERS, ...rows]));
   // Separate source audit: extracted author values are never mixed into the

@@ -17,6 +17,18 @@ const proof = { inputUrl: proofUrl, postText: caption, pageName: 'Synthetic Publ
 const html = (title, ...runs) => `<meta property="og:title" content="${title}">${runs.map(text => JSON.stringify({ text })).join('')}`;
 const noRead = async () => assert.fail('unexpected request');
 
+test('same-page legal name variants preserve conflicting proof and page addresses through Actor output',async()=>{
+  const text='Corinium Paints has moved to our new premises!\nUnit 14C, Elliot Road\nCirencester GL7 1YS';
+  const ownProof={...proof,pageName:'Corinium-Paints LTD',postAuthor:'Corinium-Paints LTD',postText:text,business:{identityStatus:'matched'}};
+  const result={inputUrl:proofUrl,pageName:'Corinium-Paints LTD',identityStatus:'matched',phone:'01632960123',phoneVerified:true,
+    address:'Unit 18 Elliott Road, Cirencester',addressVerified:true,addressSourceUrl:'https://www.facebook.com/corinium',facebookEvidenceUrl:'https://www.facebook.com/corinium'};
+  await scrapeCotTargetContacts(result,{contactTarget:{businessName:'Corinium Paints',relationship:'self',evidenceQuote:'Corinium Paints has moved to our new premises!'}},{},
+    {proofOutput:ownProof,readPage:noRead,readSite:noRead,lookup:async()=>{}});
+  const output=cotContactEvidence({},result);
+  assert.equal(output.address.conflict,true);assert.equal(output.address.candidates.length,2);
+  assert.equal(output.contactLookup.status,'conflict');assert.equal(result.address,'Unit 18 Elliott Road, Cirencester');
+});
+
 test('search Actor website hint is forwarded only for the exact self-authored page; candidate values never become verified', async () => {
   for (const correctId of [true, false]) {
     const ownCaption = 'We are opening our new premises in Taunton.';

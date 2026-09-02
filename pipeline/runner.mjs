@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { searchLead, qualifySearchPost, validateResponse, assess } from './records.mjs';
 import { exportFiles } from './exports.mjs';
+import { searchOutcome } from './search-outcome.mjs';
 
 const TERMINAL = new Set(['SUCCEEDED','FAILED','ABORTED','TIMED-OUT']);
 const RETRYABLE = new Set(['actor_partial_batch','actor_row_failure','apify_unavailable']);
@@ -50,10 +51,11 @@ export class Runner {
     }
     if (cycle?.phase === 'validating') {
       cycle={...cycle, phase:'complete', completedAt:now}; s.auditRun(cycle);
-      const failures=cycle.searchComplete ? 0 : s.get('incompleteSearches',0)+1;
+      const outcome=searchOutcome(cycle);
+      const failures=outcome === 'failed' ? s.get('incompleteSearches',0)+1 : 0;
       s.transaction(()=>{ s.set('cycle',null); s.set('nextSearchAt',now+c.searchIntervalSeconds*1000); s.set('incompleteSearches',failures); });
       if(failures>=3) return this.halt('REPEATED_INCOMPLETE_SEARCHES');
-      return {status:'cycle_complete',runId:cycle.runId};
+      return {status:'cycle_complete',runId:cycle.runId,searchOutcome:outcome};
     }
     if (now < s.get('nextSearchAt',0)) return {status:'waiting'};
     if (c.maxSearchRunsTotal && s.totals().searches >= c.maxSearchRunsTotal) return {status:'total_search_limit'};
@@ -100,21 +102,29 @@ export class Runner {
         const qualification=qualifySearchPost(post);
         if(!qualification.qualified) {
           this.s.db.prepare('INSERT OR IGNORE INTO quarantine VALUES(?,?,?,?)').run(
-            `${cycle.runId}:${cycle.offset+index}`,cycle.runId,JSON.stringify(post),'LOW_INTENT_SEARCH_RESULT');
+            `${cycle.runId}:${cycle.offset+index}`,cycle.runId,JSON.stringify(post),`LOW_INTENT_SEARCH_RESULT:${qualification.reason}`);
           return;
         }
         try {
           const lead=searchLead(post);
-          this.s.insert(post.post_id,cycle.runId,post,lead,this.now());
+          if(post.query && post.query!==cycle.input.query) throw new Error('QUERY_MISMATCH');
+          const inserted = this.s.insert(post.post_id,cycle.runId,post,lead,this.now());
+          cycle.metrics ||= { filtered: 0, duplicates: 0, retained: 0 };
+          cycle.metrics[inserted ? 'retained' : 'duplicates']++;
         } catch {
+          cycle.metrics ||= { filtered: 0, duplicates: 0, retained: 0 };
+          cycle.metrics.invalid=(cycle.metrics.invalid || 0)+1;
           this.s.db.prepare('INSERT OR IGNORE INTO quarantine VALUES(?,?,?,?)').run(
             `${cycle.runId}:${cycle.offset+index}`,cycle.runId,JSON.stringify(post),'INVALID_SEARCH_ROW');
         }
       });
+      cycle.metrics ||= { filtered: 0, duplicates: 0, retained: 0 };
+      cycle.metrics.filtered += items.filter(post => !qualifySearchPost(post).qualified).length;
       cycle={...cycle,offset:cycle.offset+items.length};
       if (cycle.offset===cycle.total) cycle.phase='validating';
       this.s.set('cycle',cycle); this.s.auditRun(cycle);
     });
+    if(cycle.metrics.invalid) return this.halt('INVALID_SEARCH_DATASET');
     return {status:cycle.phase==='validating'?'search_ingested':'ingesting',searchComplete:cycle.searchComplete,total:cycle.total};
   }
   async validateBatch(batch, day) {

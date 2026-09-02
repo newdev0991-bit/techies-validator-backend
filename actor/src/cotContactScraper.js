@@ -3,6 +3,8 @@ import { readFacebookContacts } from './facebookContacts.js';
 import { extractPageEvidence, extractAddress, extractPhone } from './facebookPageEvidence.js';
 import { googleBusinessIdentityMatches, readOfficialContacts, mergeGoogleContact } from './googleContacts.js';
 import { normalizeUkContactPhone } from './contactValues.js';
+import { proofAddresses, addressesAgree } from './proofAddress.js';
+import { sameVerifiedBusiness } from './contactTarget.js';
 
 export async function scrapeCotTargetContacts(result, request, scopedInput, { proofOutput, readPage, lookup, readSite, log = () => {} }) {
   const target = contactTargetFromProof(proofOutput, request.contactTarget);
@@ -30,10 +32,14 @@ export async function scrapeCotTargetContacts(result, request, scopedInput, { pr
       for (const suffix of ['Verified', 'Source', 'SourceUrl', 'IdentityStatus']) result[field + suffix] = null;
     }
     result.contactIdentityStatus = 'unconfirmed';
-  } else if (contactNameKey(result.pageName) === contactNameKey(target.businessName)) {
+  } else if (contactNameKey(result.pageName) === contactNameKey(target.businessName) || sameVerifiedBusiness(proofOutput, target.businessName)) {
     const lines = String(proofOutput.postText || '').split('\n');
+    const proofCandidates = proofAddresses(proofOutput.postText);
+    result.addressCandidates = proofCandidates.map(c => ({ ...c, sourceUrl: result.inputUrl, source: 'facebook-post-contact' }));
+    if (result.address) result.addressCandidates.push({ value: result.address, sourceUrl: result.addressSourceUrl || result.facebookEvidenceUrl, source: 'facebook-page-contact' });
+    result.addressConflict = proofCandidates.length > 1 || Boolean(result.address && proofCandidates.some(c => !addressesAgree(c.value, result.address)));
     if (!result.address) {
-      const address = extractAddress(lines);
+      const address = proofCandidates.length === 1 ? proofCandidates[0].value : proofCandidates.length ? '' : extractAddress(lines);
       if (address) Object.assign(result, { address, addressVerified: true, addressIdentityStatus: 'matched',
         addressSource: 'facebook-post-contact', addressSourceUrl: result.inputUrl });
     }
@@ -44,7 +50,7 @@ export async function scrapeCotTargetContacts(result, request, scopedInput, { pr
     }
     const attempts = await readFacebookContacts(result, {
       pageName: result.pageName, pageId: result.pageId, sourceUrl: result.facebookEvidenceUrl,
-    }, target.businessName, { readPage, log });
+    }, sameVerifiedBusiness(proofOutput, target.businessName) ? result.pageName : target.businessName, { readPage, log });
     result.contactLookup.attempts.push(...attempts);
     result.contactTarget.verified = result.identityStatus === 'matched';
   }
@@ -78,8 +84,10 @@ export async function scrapeCotTargetContacts(result, request, scopedInput, { pr
     },
   });
   result.contactTarget.verified ||= result.contactIdentityStatus === 'matched';
+  result.addressConflict ||= Boolean(result.address && (result.addressCandidates || []).some(c => !addressesAgree(c.value, result.address)));
   result.contactLookup.status = result.phone && result.address && result.contactTarget.verified ? 'complete' :
     result.phone || result.address ? 'partial' : 'unavailable';
+  if (result.addressConflict) result.contactLookup.status = 'conflict';
   result.contactLookup.businessName = target.businessName;
   result.contactLookup.warning = result.googleContactWarning || null;
 }
