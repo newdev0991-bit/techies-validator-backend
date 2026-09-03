@@ -10,7 +10,13 @@ export async function importSearch(input,c,s,p,runner) {
   try {
     const recorded=s.db.prepare('SELECT record FROM runs').all().map(r=>JSON.parse(r.record));
     if(recorded.some(r=>r.runId===runId)) return {status:'already_imported',runId};
-    if(s.get('cycle') || s.get('batch') || s.pending(1).length || s.get('halted')) throw new Error('IMPORT_REQUIRES_IDLE_CONTROLLER');
+    const previous=s.get('cycle'),halt=s.get('halted');
+    // An empty, fully ingested terminal cycle has no outstanding provider work.
+    // Finalize its audit on apply, never discard it or reset its failure count.
+    const emptyFinished=previous?.phase==='validating' && previous.total===0 && previous.offset===0
+      && ['SUCCEEDED','FAILED','ABORTED','TIMED-OUT'].includes(previous.runStatus);
+    if((previous && !emptyFinished) || s.get('batch') || s.pending(1).length
+      || (halt && halt.code!=='REPEATED_INCOMPLETE_SEARCHES')) throw new Error('IMPORT_REQUIRES_IDLE_CONTROLLER');
     const run=await p.run(runId);
     if(run?.id!==runId || run.actId!==c.actorId || run.status!=='SUCCEEDED'
       || !run.defaultDatasetId || !run.defaultKeyValueStoreId || !Number.isFinite(Date.parse(run.startedAt))) throw new Error('IMPORT_RUN_MISMATCH');
@@ -34,7 +40,8 @@ export async function importSearch(input,c,s,p,runner) {
         items.push(post);
       }
     }
-    const report={runId,total:items.length,searchSubmitted:false,validationSubmitted:false};
+    const report={runId,total:items.length,finalizesEmptyCycle:emptyFinished?previous.runId:null,
+      searchSubmitted:false,validationSubmitted:false};
     if(input.operation==='import-search-plan') return {status:'import_plan',...report};
     // Preserve query position and budget history. Account for the already-paid
     // external search exactly once, together with its durable import receipt.
@@ -42,6 +49,13 @@ export async function importSearch(input,c,s,p,runner) {
       phase:'ingesting',input:source,runStatus:run.status,datasetId:run.defaultDatasetId,
       kvId:run.defaultKeyValueStoreId,usageTotalUsd:run.usageTotalUsd??null,offset:0};
     s.transaction(()=>{
+      if(emptyFinished) {
+        s.auditRun({...previous,phase:'complete',completedAt:Date.now()});
+        const failures=previous.searchComplete===true?0:s.get('incompleteSearches',0)+1;
+        s.set('incompleteSearches',failures);
+        s.set('nextSearchAt',Date.now()+c.searchIntervalSeconds*1000);
+        if(failures>=3 && !halt) s.set('halted',{code:'REPEATED_INCOMPLETE_SEARCHES',at:Date.now()});
+      }
       s.charge(run.startedAt.slice(0,10),'searches');s.set('cycle',cycle);s.auditRun(cycle);
     });
     await s.flush?.();

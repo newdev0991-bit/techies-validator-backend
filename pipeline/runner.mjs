@@ -40,8 +40,12 @@ export class Runner {
   async work() {
     const c=this.c, s=this.s, now=this.now(), day=new Date(now).toISOString().slice(0,10);
     if (!c.enabled) return { status: 'disabled' };
-    if (s.get('halted')) return { status: 'halted', ...s.get('halted') };
     let cycle=s.get('cycle');
+    const halt=s.get('halted');
+    // A verified explicit import may finish validation while automatic search
+    // remains halted. It cannot start a search or clear the search failure history.
+    if (halt && !(halt.code==='REPEATED_INCOMPLETE_SEARCHES' && cycle?.origin==='standalone_import'
+      && ['ingesting','validating'].includes(cycle.phase))) return { status: 'halted', ...halt };
     if (cycle?.phase === 'starting') return this.halt('SEARCH_START_UNCERTAIN');
     const batch=s.get('batch');
     if (batch?.phase === 'sending') return this.halt('VALIDATION_RESULT_UNCERTAIN');
@@ -69,6 +73,10 @@ export class Runner {
     if (cycle?.phase === 'validating') {
       cycle={...cycle, phase:'complete', completedAt:now}; s.auditRun(cycle);
       const outcome=searchOutcome(cycle);
+      if(cycle.origin==='standalone_import') {
+        s.transaction(()=>{s.set('cycle',null);s.set('nextSearchAt',Math.max(s.get('nextSearchAt',0),now+c.searchIntervalSeconds*1000));});
+        return {status:'cycle_complete',runId:cycle.runId,searchOutcome:outcome};
+      }
       const failures=outcome === 'failed' ? s.get('incompleteSearches',0)+1 : 0;
       s.transaction(()=>{ s.set('cycle',null); s.set('nextSearchAt',now+c.searchIntervalSeconds*1000); s.set('incompleteSearches',failures); });
       if(failures>=3) return this.halt('REPEATED_INCOMPLETE_SEARCHES');
