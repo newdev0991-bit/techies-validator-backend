@@ -31,7 +31,7 @@ try {
       const result = await new Runner({...c,enabled},store,new Providers(c)).tick();
       console.log(JSON.stringify(result));
       if (result.status === 'halted') process.exitCode=2;
-    } else if (['attach-run','retry-batch','resume','recover-bounded-searches'].includes(command)) {
+    } else if (['attach-run','retry-batch','resume','recover-bounded-searches','recover-preflight'].includes(command)) {
       console.log(JSON.stringify(await recover(command,process.argv.slice(3),c,store,new Providers(c))));
     } else throw new Error('Unknown pipeline command');
   }

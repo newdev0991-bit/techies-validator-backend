@@ -9,7 +9,7 @@ import { validateConfig } from '../pipeline/config.mjs';
 import { CloudLease,CloudState } from './state.mjs';
 import { resultSnapshot } from './results.mjs';
 import { processingGates,controllerReport,publishReport } from './report.mjs';
-import { recover } from '../pipeline/recovery.mjs';
+import { controllerOperation } from './operations.mjs';
 
 // No new long-lived Apify secret is needed inside the Actor: use its run token.
 const client=new ApifyClient({token:process.env.APIFY_TOKEN,maxRetries:0,timeoutSecs:30});
@@ -52,11 +52,7 @@ if(!await lease.acquire()) {
       providers[method]=async(...args)=>{await lease.renew();await lease.assert();return original(...args);};
     }
     const runner=new Runner(config,store,providers);
-    const operation=input.operation || 'tick';
-    if (!['tick','recovery-plan','recover-bounded-searches'].includes(operation)) throw new Error('INVALID_OPERATION');
-    if (operation !== 'tick' && input.enabled === true) throw new Error('RECOVERY_REQUIRES_PROCESSING_OFF');
-    const outcome=operation === 'tick' ? await runner.tick() :
-      await recover('recover-bounded-searches',operation === 'recovery-plan' ? [] : ['--apply'],{...config,enabled:false},store,providers);
+    const outcome=await controllerOperation(input,config,store,providers,runner);
     await lease.assert();
     const view=resultSnapshot(store,Date.now(),config.enabled,config,gates);
     // One record is the coherent frontend view. Never expose raw responses or credentials.

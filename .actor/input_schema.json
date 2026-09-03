@@ -3,7 +3,7 @@
   "type": "object",
   "schemaVersion": 1,
   "properties": {
-    "operation": {"title":"Operation", "type":"string", "editor":"select", "enum":["tick","recovery-plan","recover-bounded-searches"], "default":"tick", "description":"Recovery only reconciles bounded partial searches, never starts paid work, and requires Allow processing off. Run recovery-plan first."},
+    "operation": {"title":"Operation", "type":"string", "editor":"select", "enum":["tick","recovery-plan","recover-bounded-searches","preflight-recovery-plan","recover-preflight"], "default":"tick", "description":"Recovery never starts a search or validation and requires Allow processing off. For an idle readiness halt, run preflight-recovery-plan then recover-preflight. For bounded partial searches, run recovery-plan then recover-bounded-searches."},
     "enabled": {"title":"Allow processing", "type":"boolean", "default":false,
       "description":"This switch alone does not start collection. CONFIG.enabled and PIPELINE_LIVE_ENABLED must also be true, and approved budget must remain. The Output report explains every disabled gate and the saved lead counts. Default: status only, no search or validation."},
     "stateStoreId": {"title":"Pipeline state store", "type":"string", "editor":"resourcePicker", "resourceType":"keyValueStore", "resourcePermissions":["READ","WRITE"], "description":"Must match COT_CLOUD_STORE_ID. Grants access only to the selected pipeline storage."},

@@ -293,3 +293,100 @@ test('config caps, scheduler API access, and formula escaping fail closed',()=>{
   assert.equal(csvCell('=HYPERLINK("https://evil")'),'"\'=HYPERLINK(""https://evil"")"');
   assert.equal(csvCell('01632960123'),'"01632960123"');
 });
+
+
+test('readiness retries survive restart with bounded backoff and no paid reservations',async t=>{
+  const f=fixture(t);f.p.preflight=async()=>{f.calls.preflight++;throw new ProviderError('PROVIDER_CONNECTION_UNCERTAIN');};
+  assert.equal((await f.runner.tick()).status,'preflight_retry');
+  assert.deepEqual({...f.s.totals()},{searches:0,validations:0});assert.equal(f.s.get('cycle'),null);
+  const restored=new Store(f.c.dataDir);t.after(()=>restored.close());
+  const runner=new Runner(f.c,restored,f.p,{now:f.now});
+  assert.equal((await runner.tick()).status,'preflight_backoff');assert.equal(f.calls.preflight,1);
+  f.advance(60000);assert.equal((await runner.tick()).attempts,2);
+  f.advance(119999);assert.equal((await runner.tick()).status,'preflight_backoff');
+  f.advance(1);assert.equal((await runner.tick()).code,'PREFLIGHT_RETRIES_EXHAUSTED');
+  f.advance(86400000);assert.equal((await runner.tick()).status,'halted');
+  assert.equal(f.calls.preflight,3);assert.equal(f.calls.start,0);assert.equal(f.calls.validate,0);
+  assert.deepEqual({...restored.totals()},{searches:0,validations:0});
+});
+
+test('recovered readiness permits exactly one reserved search and retains failure history',async t=>{
+  const f=fixture(t);f.s.set('incompleteSearches',1);
+  f.p.preflight=async()=>{if(++f.calls.preflight===1)throw new ProviderError('INVALID_PROVIDER_JSON',503);};
+  assert.equal((await f.runner.tick()).status,'preflight_retry');
+  f.advance(60000);assert.equal((await f.runner.tick()).status,'search_started');
+  assert.equal(f.s.get('preflightRetry'),null);assert.equal(f.s.get('incompleteSearches'),1);
+  assert.equal(f.calls.start,1);assert.equal(f.s.totals().searches,1);
+  await f.runner.tick();assert.equal(f.calls.start,1);
+});
+
+test('validation readiness retry preserves unsent batch identity and consumes no validation attempts',async t=>{
+  const f=fixture(t);await ingest(f);
+  f.p.preflight=async()=>{throw new ProviderError('PROVIDER_CONNECTION_UNCERTAIN');};
+  assert.equal((await f.runner.tick()).status,'preflight_retry');
+  const batch=f.s.get('batch');assert.equal(batch.attempts,0);assert.equal(batch.phase,'ready');
+  assert.equal(f.s.totals().validations,0);assert.equal(f.calls.validate,0);
+  f.p.preflight=async()=>{};
+  assert.equal((await f.runner.tick()).status,'preflight_backoff');
+  assert.deepEqual(f.s.get('batch'),batch);
+  f.advance(60000);assert.equal((await f.runner.tick()).status,'validated');
+  assert.equal(f.calls.validate,1);assert.equal(f.s.totals().validations,1);
+});
+
+test('authentication, contract and malformed success failures do not retry readiness',async t=>{
+  for(const error of [new ProviderError('PROVIDER_HTTP_401',401),new ProviderError('VALIDATOR_NOT_READY'),
+    new ProviderError('ACTOR_ID_MISMATCH'),new ProviderError('INVALID_PROVIDER_JSON',200)]) {
+    const f=fixture(t);f.p.preflight=async()=>{f.calls.preflight++;throw error;};
+    assert.equal((await f.runner.tick()).status,'halted');f.advance(60000);await f.runner.tick();
+    assert.equal(f.calls.preflight,1);assert.equal(f.s.get('preflightRetry'),null);assert.equal(f.calls.start,0);
+  }
+});
+
+test('idle preflight recovery verifies again on apply and preserves all usage and lead history',async t=>{
+  const f=fixture(t);f.c.enabled=false;
+  for(let i=0;i<12;i++)f.s.charge('2026-09-03','searches');
+  for(let i=0;i<28;i++)f.s.charge('2026-09-03','validations');
+  f.s.insert('saved','prior',post(),{'Company Name':'Saved'},NOW);
+  f.s.set('halted',{code:'PROVIDER_CONNECTION_UNCERTAIN',at:NOW});f.s.set('incompleteSearches',1);f.s.set('queryIndex',2);
+  const before=f.s.snapshot();let flushes=0;f.s.flush=async()=>{flushes++;};
+  const plan=await recover('recover-preflight',[],f.c,f.s,f.p);
+  assert.equal(plan.eligible,true);assert.deepEqual(f.s.snapshot(),before);assert.equal(flushes,0);
+  f.p.preflight=async()=>{throw new ProviderError('PROVIDER_CONNECTION_UNCERTAIN');};
+  await assert.rejects(()=>recover('recover-preflight',['--apply'],f.c,f.s,f.p),/NOT_SAFE/);
+  assert.deepEqual(f.s.snapshot(),before);
+  f.p.preflight=async()=>{f.calls.preflight++;};
+  assert.equal((await recover('recover-preflight',['--apply'],f.c,f.s,f.p)).status,'recovered');
+  assert.equal(f.s.get('halted'),null);assert.equal(flushes,1);assert.equal(f.calls.preflight,2);
+  assert.deepEqual({...f.s.totals()},{searches:12,validations:28});assert.equal(f.s.get('incompleteSearches'),1);
+  assert.equal(f.s.get('queryIndex'),2);assert.deepEqual(f.s.snapshot().leads,before.leads);
+  assert.deepEqual(f.s.snapshot().daily,before.daily);assert.deepEqual(f.s.snapshot().runs,before.runs);
+  assert.equal(f.calls.start,0);assert.equal(f.calls.validate,0);
+});
+
+test('preflight recovery refuses active, uncertain, unrelated or repeatedly failed work',async t=>{
+  const cases=[['cycle',{phase:'starting'}],['cycle',{phase:'searching'}],['batch',{phase:'sending'}],
+    ['batch',{phase:'ready'}],['halted',{code:'VALIDATION_RESULT_UNCERTAIN'}],['halted',{code:'SEARCH_START_UNCERTAIN'}],
+    ['halted',{code:'REPEATED_INCOMPLETE_SEARCHES'}],['incompleteSearches',3]];
+  for(const [key,value] of cases) {
+    const f=fixture(t);f.c.enabled=false;f.s.set('halted',{code:'PROVIDER_CONNECTION_UNCERTAIN'});f.s.set(key,value);
+    const before=f.s.snapshot();assert.equal((await recover('recover-preflight',[],f.c,f.s,f.p)).eligible,false);
+    await assert.rejects(()=>recover('recover-preflight',['--apply'],f.c,f.s,f.p),/NOT_SAFE/);
+    assert.deepEqual(f.s.snapshot(),before);assert.equal(f.calls.preflight,0);
+  }
+  const f=fixture(t);f.s.set('halted',{code:'PROVIDER_CONNECTION_UNCERTAIN'});
+  await assert.rejects(()=>recover('recover-preflight',['--apply'],f.c,f.s,f.p),/PROCESSING_OFF/);
+  await assert.rejects(()=>recover('resume',[],f.c,f.s,f.p),/VERIFIED_PREFLIGHT/);
+});
+
+test('validator readiness waits up to 90 seconds while ordinary provider requests retain their deadline',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  const p=new Providers(base,{token:'synthetic',validatorToken:'synthetic',fetchFn:async(url,{signal})=>
+    new Promise((resolve,reject)=>signal.addEventListener('abort',()=>reject(Error('timeout')),{once:true}))});
+  let settled=false;const pending=p.preflight().finally(()=>{settled=true;});
+  const rejected=assert.rejects(pending,{code:'PROVIDER_CONNECTION_UNCERTAIN'});
+  t.mock.timers.tick(30000);await Promise.resolve();assert.equal(settled,false);
+  t.mock.timers.tick(59999);await Promise.resolve();assert.equal(settled,false);
+  t.mock.timers.tick(1);await rejected;
+  const ordinary=assert.rejects(p.request('https://example.test'),{code:'PROVIDER_CONNECTION_UNCERTAIN'});
+  t.mock.timers.tick(30000);await ordinary;
+});

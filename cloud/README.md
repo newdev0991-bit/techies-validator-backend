@@ -140,3 +140,28 @@ not spend Apify credits. Frontend tests and production build run in its repo.
 Local Docker verification requires a running Docker engine.
 
 Official reference: [Apify schedules](https://docs.apify.com/actors/running/schedules).
+
+
+## Readiness timeouts and idle recovery
+
+The validator capability GET has a 90-second deadline to allow service startup.
+Transient connection failures and HTTP 408/429/502/503/504 responses get at most
+three readiness attempts, checkpointed between invocations with one-minute then
+two-minute backoff. No search or validation reservation is consumed until readiness
+succeeds. Exhaustion halts with PREFLIGHT_RETRIES_EXHAUSTED. Authentication,
+identity/contract failures and uncertain paid requests still halt immediately.
+
+For an existing idle PROVIDER_CONNECTION_UNCERTAIN or PREFLIGHT_RETRIES_EXHAUSTED
+halt, pause the controller schedule before maintenance. With Allow processing off,
+run preflight-recovery-plan, inspect OUTPUT.recovery, then run recover-preflight.
+The apply operation repeats the provider checks and refuses any outstanding cycle
+or batch, unrelated halt, or three incomplete searches. It saves through the normal
+cloud lease and checkpoint, preserving leads, deduplication, counters, query
+position, and incomplete-search history. It submits no paid search or validation.
+The controller invocation and storage operations can still incur platform costs.
+
+Resume the schedule only within the approved collection budget. Merely deploying
+this change does not clear an existing halt. This does not repair Facebook HTTP 400
+responses from the separate search Actor. For local state, the equivalent commands
+are node pipeline/cli.mjs recover-preflight and the same command with --apply; local
+commands do not modify the cloud state.

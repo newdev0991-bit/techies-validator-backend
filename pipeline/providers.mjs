@@ -2,6 +2,12 @@ export class ProviderError extends Error {
   constructor(code, status = 0) { super(code); this.code = code; this.status = status; }
 }
 
+// Only classify failures this way before a paid request has been submitted.
+export function transientPreflightError(error) {
+  return error?.code === 'PROVIDER_CONNECTION_UNCERTAIN'
+    || [408,429,502,503,504].includes(error?.status);
+}
+
 export class Providers {
   constructor(config, { token = process.env.APIFY_API_TOKEN, validatorToken = process.env.COT_PIPELINE_API_KEY, fetchFn = fetch } = {}) {
     this.c = config; this.token = token; this.validatorToken = validatorToken; this.fetch = fetchFn;
@@ -41,7 +47,8 @@ export class Providers {
   async preflight() {
     if (!this.token) throw new ProviderError('APIFY_TOKEN_MISSING');
     if (!this.validatorToken) throw new ProviderError('VALIDATOR_TOKEN_MISSING');
-    const caps = await this.request(`${this.c.validatorBaseUrl.replace(/\/$/,'')}/pipeline-capabilities`, { token: this.validatorToken });
+    // Allow a sleeping validator to wake; paid requests keep their own deadlines.
+    const caps = await this.request(`${this.c.validatorBaseUrl.replace(/\/$/,'')}/pipeline-capabilities`, { token: this.validatorToken, timeout: 90000 });
     if (caps?.contactEnrichment !== 'cot-contact-enrichment-v1' || caps?.batchContract !== 'cot-data-batch-v1'
         || caps.maxBatchSize < this.c.validationBatchSize
         || !Number.isFinite(caps.actorMaxChargeUsd) || caps.actorMaxChargeUsd <= 0

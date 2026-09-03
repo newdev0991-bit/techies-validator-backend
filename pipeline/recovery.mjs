@@ -2,6 +2,23 @@ import { isDeepStrictEqual } from 'node:util';
 import { searchOutcome } from './search-outcome.mjs';
 import { searchLead } from './records.mjs';
 
+const preflightHalts=new Set(['PROVIDER_CONNECTION_UNCERTAIN','PREFLIGHT_RETRIES_EXHAUSTED']);
+export async function preflightRecoveryReport(s,c,p) {
+  const blockers=[],halt=s.get('halted');
+  if (!preflightHalts.has(halt?.code)) blockers.push('HALT_NOT_ELIGIBLE');
+  // This recovery is solely for an idle controller, never outstanding paid work.
+  if (s.get('cycle') || s.get('batch')) blockers.push('WORK_IN_PROGRESS');
+  if (s.get('incompleteSearches',0)>=3) blockers.push('REPEATED_INCOMPLETE_SEARCHES');
+  if (!blockers.length) {
+    try { await p.preflight(); }
+    catch (error) {
+      blockers.push('PREFLIGHT_NOT_READY');
+      blockers.push(/^[A-Za-z0-9_-]{1,100}$/.test(error?.code || '') ? error.code : 'PROVIDER_CHECK_FAILED');
+    }
+  }
+  return {eligible:blockers.length===0,blockers:[...new Set(blockers)],originalHalt:halt,totals:s.totals()};
+}
+
 export async function boundedRecoveryReport(s, c, p) {
   const blockers=[];
   if (s.get('halted')?.code !== 'REPEATED_INCOMPLETE_SEARCHES') blockers.push('HALT_NOT_ELIGIBLE');
@@ -43,7 +60,18 @@ export async function recover(command,args,c,s,p) {
   if (!s.acquire()) throw new Error('Worker is busy');
   try {
     const cycle=s.get('cycle'), batch=s.get('batch');
-    if (command==='recover-bounded-searches') {
+    if (command==='recover-preflight') {
+      if (args.includes('--apply') && c.enabled) throw new Error('PREFLIGHT_RECOVERY_REQUIRES_PROCESSING_OFF');
+      const report=await preflightRecoveryReport(s,c,p);
+      if (!args.includes('--apply')) return {status:'recovery_plan',...report};
+      if (!report.eligible) throw new Error('PREFLIGHT_RECOVERY_NOT_SAFE');
+      s.transaction(()=>{
+        s.set('halted',null);s.set('preflightRetry',null);
+        s.set('lastRecovery',{at:Date.now(),command,...report});
+      });
+      await s.flush?.();
+      return {status:'recovered',command,...report};
+    } else if (command==='recover-bounded-searches') {
       const report=await boundedRecoveryReport(s,c,p);
       if (!args.includes('--apply')) return {status:'recovery_plan',...report};
       if (!report.eligible || c.enabled) throw new Error('BOUNDED_RECOVERY_NOT_SAFE');
@@ -64,6 +92,7 @@ export async function recover(command,args,c,s,p) {
     } else if (command==='resume') {
       if (cycle?.phase==='starting' || batch?.phase==='sending') throw new Error('Reconcile uncertain paid operation first');
       if (s.get('halted')?.code==='REPEATED_INCOMPLETE_SEARCHES') throw new Error('USE_VERIFIED_BOUNDED_RECOVERY');
+      if (preflightHalts.has(s.get('halted')?.code)) throw new Error('USE_VERIFIED_PREFLIGHT_RECOVERY');
       s.transaction(()=>{s.set('halted',null);s.set('incompleteSearches',0);});
     } else throw new Error('UNKNOWN_RECOVERY_COMMAND');
     return {status:'recovered',command};

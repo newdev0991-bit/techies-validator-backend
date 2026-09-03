@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { searchLead, qualifySearchPost, validateResponse, assess } from './records.mjs';
 import { exportFiles } from './exports.mjs';
 import { searchOutcome } from './search-outcome.mjs';
+import { transientPreflightError } from './providers.mjs';
 
 const TERMINAL = new Set(['SUCCEEDED','FAILED','ABORTED','TIMED-OUT']);
 const RETRYABLE = new Set(['actor_partial_batch','actor_row_failure','apify_unavailable']);
@@ -10,6 +11,22 @@ const safeCode = error => /^[A-Z_a-z0-9-]{1,100}$/.test(error?.code || '') ? err
 export class Runner {
   constructor(config, store, providers, { now = Date.now } = {}) { this.c=config; this.s=store; this.p=providers; this.now=now; }
   halt(code) { this.s.set('halted', { code, at: this.now() }); return { status: 'halted', code }; }
+  async checkPreflight() {
+    const retry=this.s.get('preflightRetry');
+    if (retry && this.now()<retry.nextAttemptAt) return {status:'preflight_backoff',...retry};
+    try { await this.p.preflight(); }
+    catch (error) {
+      const code=safeCode(error);
+      if (!transientPreflightError(error)) return this.halt(code);
+      const attempts=(retry?.attempts || 0)+1;
+      const next={code,attempts,nextAttemptAt:this.now()+60000*attempts};
+      this.s.set('preflightRetry',next);
+      if (attempts>=3) return this.halt('PREFLIGHT_RETRIES_EXHAUSTED');
+      return {status:'preflight_retry',...next};
+    }
+    if (retry) this.s.set('preflightRetry',null);
+    return null;
+  }
   async tick() {
     if (!this.s.acquire()) return { status: 'busy' };
     try {
@@ -63,8 +80,8 @@ export class Runner {
     if (s.daily(day).searches >= c.maxSearchRunsPerDay) return {status:'daily_search_limit'};
     if (s.daily(day).validations >= c.maxValidationCallsPerDay) return {status:'daily_validation_limit'};
     if (s.count() >= c.maxStoredLeads) return this.halt('STORAGE_LEAD_LIMIT');
-    try { await this.p.preflight(); }
-    catch (e) { return this.halt(safeCode(e)); }
+    const readiness=await this.checkPreflight();
+    if (readiness) return readiness;
     const queryIndex=s.get('queryIndex',0) % c.queries.length;
     cycle={id:randomUUID(),phase:'starting',createdAt:now,input:{...c.searchInput,query:c.queries[queryIndex]},queryIndex};
     // Commit BEFORE the paid POST. If its outcome is lost, pause for reconciliation.
@@ -132,7 +149,8 @@ export class Runner {
     if (c.maxValidationCallsTotal && s.totals().validations>=c.maxValidationCallsTotal) return {status:'total_validation_limit'};
     if (this.now()<(batch.nextAttemptAt||0)) return {status:'validation_backoff'};
     if (s.daily(day).validations>=c.maxValidationCallsPerDay) return {status:'daily_validation_limit'};
-    try { await this.p.preflight(); } catch (e) { return this.halt(safeCode(e)); }
+    const readiness=await this.checkPreflight();
+    if (readiness) return readiness;
     batch={...batch,phase:'sending',attempts:batch.attempts+1};
     s.transaction(()=>{s.charge(day,'validations');s.set('batch',batch);});
     await s.flush?.();

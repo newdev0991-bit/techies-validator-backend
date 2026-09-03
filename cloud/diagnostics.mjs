@@ -8,8 +8,9 @@ export function pipelineDiagnostics(store, config, gates, now) {
   const blockers=[...(gates?.blockers || []),...(store.get('halted') ? [store.get('halted').code] : [])];
   for (const [name,b] of Object.entries(budgets)) if (b.remaining === 0) blockers.push(`${name}_allowance_exhausted`);
   const dailyLimited=budgets.dailySearches.remaining===0 || budgets.dailyValidations.remaining===0;
-  const next=Math.max(store.get('nextSearchAt',0),dailyLimited ? Date.parse(`${day}T00:00:00Z`)+86400000 : now);
-  return {blockers,budgets,nextEligibleSearchAt:blockers.some(b=>!b.startsWith('daily')) ? null : new Date(next).toISOString()};
+  const readiness=store.get('preflightRetry');
+  const next=Math.max(readiness?.nextAttemptAt || 0,store.get('nextSearchAt',0),dailyLimited ? Date.parse(`${day}T00:00:00Z`)+86400000 : now);
+  return {blockers,budgets,...(readiness ? {readiness} : {}),nextEligibleSearchAt:blockers.some(b=>!b.startsWith('daily')) ? null : new Date(next).toISOString()};
 }
 
 export function runMetrics(store) {

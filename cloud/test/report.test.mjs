@@ -64,3 +64,18 @@ test('Console status uses terminal explanation and report survives an optional s
   await publishReport({run(){return {async update(){throw Error('transient failure');}};}},kv,'run',report);
   assert.deepEqual(records.get('OUTPUT').value,report);
 });
+
+
+test('readiness reports explain attempts and next check without claiming new leads',t=>{
+  const dir=mkdtempSync(path.join(os.tmpdir(),'cot-readiness-report-')),s=new Store(dir);t.after(()=>s.close());
+  const now=Date.parse('2026-09-03T10:00:00Z'),nextAttemptAt=now+60000;
+  s.set('preflightRetry',{code:'PROVIDER_CONNECTION_UNCERTAIN',attempts:1,nextAttemptAt});
+  const config={...base,enabled:true},gates={enabled:true,blockers:[]};
+  const view=resultSnapshot(s,now,true,config,gates);
+  assert.equal(view.diagnostics.nextEligibleSearchAt,new Date(nextAttemptAt).toISOString());
+  for(const status of ['preflight_retry','preflight_backoff']) {
+    const report=controllerReport({status,...s.get('preflightRetry')},view,config,gates,'store');
+    assert.ok(report.message.includes('1/3 attempts used'));assert.match(report.message,/No search or validation submitted/);
+    assert.match(report.message,/10:01:00/);
+  }
+});
