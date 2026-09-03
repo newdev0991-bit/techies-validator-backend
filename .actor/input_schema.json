@@ -3,7 +3,8 @@
   "type": "object",
   "schemaVersion": 1,
   "properties": {
-    "operation": {"title":"Operation", "type":"string", "editor":"select", "enum":["tick","recovery-plan","recover-bounded-searches","preflight-recovery-plan","recover-preflight"], "default":"tick", "description":"Recovery never starts a search or validation and requires Allow processing off. For an idle readiness halt, run preflight-recovery-plan then recover-preflight. For bounded partial searches, run recovery-plan then recover-bounded-searches."},
+    "operation": {"title":"Operation", "type":"string", "editor":"select", "enum":["tick","recovery-plan","recover-bounded-searches","preflight-recovery-plan","recover-preflight","import-search-plan","import-search-run"], "default":"tick", "description":"Recovery and import require Allow processing off and never submit search or validation. To import a standalone successful search, supply its run ID, inspect import-search-plan, then use import-search-run. Qualifying posts enter normal pending validation."},
+    "searchRunId": {"title":"Existing search run ID", "type":"string", "description":"Required only for import-search-plan or import-search-run. Must be a successful run of the configured search Actor with matching current search settings."},
     "enabled": {"title":"Allow processing", "type":"boolean", "default":false,
       "description":"This switch alone does not start collection. CONFIG.enabled and PIPELINE_LIVE_ENABLED must also be true, and approved budget must remain. The Output report explains every disabled gate and the saved lead counts. Default: status only, no search or validation."},
     "stateStoreId": {"title":"Pipeline state store", "type":"string", "editor":"resourcePicker", "resourceType":"keyValueStore", "resourcePermissions":["READ","WRITE"], "description":"Must match COT_CLOUD_STORE_ID. Grants access only to the selected pipeline storage."},

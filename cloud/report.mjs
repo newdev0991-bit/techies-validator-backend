@@ -24,6 +24,7 @@ export function controllerReport(outcome,view,config,gates,storageId) {
   return {status, message, generatedAt:view.generatedAt, processing:gates,
     diagnostics:view.diagnostics,latestCycle:view.runMetrics?.[0] || null,
     ...(status==='recovery_plan'||status==='recovered'?{recovery:outcome}:{}),
+    ...(status==='import_plan'||status==='already_imported'||outcome.searchSubmitted===false?{import:outcome}:{}),
     counts:view.counts,savedLeadCount,totals:view.totals,lifetimeBudget:budget,storageId,
     ...(outcome.code?{code:safeCode(outcome.code)}:{}),
     ...(outcome.runId?{runId:outcome.runId}:{}),
