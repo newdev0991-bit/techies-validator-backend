@@ -784,6 +784,12 @@ export function createCotBatchHandler({
         console.error(`[validate-batch] ${JSON.stringify(providerFailure.diagnostic)}`);
         return sendError(res, providerFailure.status, providerFailure.code, providerFailure.message);
       }
+      // A required setting that is absent is an operator fix, not an outage. Its own
+      // message names the variable; nothing else about the error is echoed back.
+      if (error?.code === 'BACKEND_NOT_CONFIGURED') {
+        console.error('[validate-batch] Backend is not fully configured.');
+        return sendError(res, 503, 'BACKEND_NOT_CONFIGURED', error.message);
+      }
       console.error('[validate-batch] Unexpected non-provider error.');
       return sendError(res, 500, 'BATCH_FAILED', 'Batch validation failed.');
     }
