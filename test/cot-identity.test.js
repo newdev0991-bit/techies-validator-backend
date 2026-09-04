@@ -98,3 +98,25 @@ test('short-quote expansion cannot manufacture identity from unrelated or unsafe
     assert.equal(contactTargetFromProof(row.fetchResults.rawData, short), null);
   }
 });
+
+test('an ownership or management change is a self-event even without a pronoun', () => {
+  // "under new ownership" and "under new management" describe the publisher's own business
+  // and are how such posts are actually written, but the self-event pattern required a
+  // we/our/us near the event word, so these fell to unresolved and lost their contacts.
+  for (const text of ['Belmont House is under new ownership.', 'Croft House, under new management from Monday.']) {
+    const post = structuredClone(lead);
+    post.fetchResults.rawData.postText = text;
+    const identity = evaluateCotIdentity(post, { ...claim, evidenceQuote: text });
+    assert.equal(identity.status, 'matched', `expected matched for ${JSON.stringify(text)}`);
+  }
+});
+
+test('a pronoun-less event still fails when the model does not claim it as its own', () => {
+  const text = 'The Old Mill is under new ownership.';
+  const post = structuredClone(lead);
+  post.fetchResults.rawData.postText = text;
+  for (const invalid of [{ ...claim, relationship: 'third_party', evidenceQuote: text },
+    { ...claim, businessName: 'The Old Mill', evidenceQuote: text }]) {
+    assert.notEqual(evaluateCotIdentity(post, invalid).status, 'matched');
+  }
+});
