@@ -6,12 +6,6 @@ import { searchOutcome } from './search-outcome.mjs';
 const TERMINAL = new Set(['SUCCEEDED','FAILED','ABORTED','TIMED-OUT']);
 const RETRYABLE = new Set(['actor_partial_batch','actor_row_failure','apify_unavailable']);
 const safeCode = error => /^[A-Z_a-z0-9-]{1,100}$/.test(error?.code || '') ? error.code : 'PIPELINE_OPERATION_FAILED';
-// Reaching the validator can fail for reasons that resolve themselves. Uncertainty about
-// paid work never appears here: those codes still latch.
-const TRANSIENT_PREFLIGHT = new Set([
-  'PROVIDER_CONNECTION_UNCERTAIN', 'PROVIDER_HTTP_502', 'PROVIDER_HTTP_503', 'PROVIDER_HTTP_504'
-]);
-const MAX_PREFLIGHT_ATTEMPTS = 5;
 
 export class Runner {
   constructor(config, store, providers, { now = Date.now } = {}) { this.c=config; this.s=store; this.p=providers; this.now=now; }
@@ -69,27 +63,8 @@ export class Runner {
     if (s.daily(day).searches >= c.maxSearchRunsPerDay) return {status:'daily_search_limit'};
     if (s.daily(day).validations >= c.maxValidationCallsPerDay) return {status:'daily_validation_limit'};
     if (s.count() >= c.maxStoredLeads) return this.halt('STORAGE_LEAD_LIMIT');
-    try { await this.p.preflight(); this.s.set('preflightFailures', 0); }
-    catch (e) {
-      const code = safeCode(e);
-      // Preflight runs before any charge or Actor start, so retrying it cannot double-spend.
-      // A latched halt here needs a manual state edit to clear, which turned a momentary
-      // validator cold start into hours of collected nothing.
-      if (TRANSIENT_PREFLIGHT.has(code)) {
-        const failures = this.s.get('preflightFailures', 0) + 1;
-        if (failures >= MAX_PREFLIGHT_ATTEMPTS) {
-          this.s.set('preflightFailures', 0);
-          return this.halt('PREFLIGHT_UNAVAILABLE');
-        }
-        const backoff = Math.min(15 * 60_000, 60_000 * 2 ** (failures - 1));
-        this.s.transaction(() => {
-          this.s.set('preflightFailures', failures);
-          this.s.set('nextSearchAt', now + backoff);
-        });
-        return { status: 'preflight_retry', code, attempt: failures };
-      }
-      return this.halt(code);
-    }
+    try { await this.p.preflight(); }
+    catch (e) { return this.halt(safeCode(e)); }
     const queryIndex=s.get('queryIndex',0) % c.queries.length;
     cycle={id:randomUUID(),phase:'starting',createdAt:now,input:{...c.searchInput,query:c.queries[queryIndex]},queryIndex};
     // Commit BEFORE the paid POST. If its outcome is lost, pause for reconciliation.
