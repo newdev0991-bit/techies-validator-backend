@@ -40,3 +40,25 @@ test('preflight reports inaccessible actors and safely logs API rejection', asyn
   assert.match(logs[0], /invalid-token/);
   assert.doesNotMatch(logs[0], /SECRET/);
 });
+
+test('a spend or quota refusal is reported as a quota problem, not a permissions one', () => {
+  // "Monthly usage hard limit exceeded" arrives as a 403 alongside genuine permission
+  // denials. Telling an operator to check token permissions sends them to the wrong
+  // dashboard; the account simply has to be topped up or the cap raised.
+  for (const type of ['platform-feature-disabled', 'monthly-usage-hard-limit-reached']) {
+    const result = apifyFailure({ name: 'ApifyApiError', statusCode: 403, type });
+    assert.equal(result.code, 'APIFY_USAGE_LIMIT');
+    assert.match(result.message, /usage limit|spend/i);
+    assert.equal(result.diagnostic.providerType, type);
+  }
+});
+
+test('a payment refusal is also a usage limit rather than a generic account error', () => {
+  const result = apifyFailure({ name: 'ApifyApiError', statusCode: 402, type: 'payment-required' });
+  assert.equal(result.code, 'APIFY_USAGE_LIMIT');
+});
+
+test('an ordinary 403 still reads as an access problem', () => {
+  const result = apifyFailure({ name: 'ApifyApiError', statusCode: 403, type: 'forbidden' });
+  assert.equal(result.code, 'APIFY_ACCESS_DENIED');
+});
