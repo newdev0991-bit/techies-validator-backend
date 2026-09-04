@@ -223,8 +223,14 @@ finish, and the next enabled tick resumes polling it.
   until the next enabled tick. Automatic retries are limited to the named
   transient 503 codes, with one/two-minute backoff and at most three attempts.
 - Fix a non-ambiguous failure, then `node pipeline/cli.mjs resume`.
-  This cannot clear an uncertain paid request. Three consecutive incomplete
-  searches halt after preserving/processing their available rows.
+  This cannot clear an uncertain paid request.
+- An incomplete search (no usable posts, typically Facebook rejecting the
+  first request with HTTP 400) preserves its audit and is retried after 5, 10,
+  20 and 40 minutes, then at the normal interval, never later than
+  `searchIntervalSeconds`. It does not halt; a later usable search resets the
+  count, and the daily search allowance still bounds the spend. A
+  `REPEATED_INCOMPLETE_SEARCHES` halt saved by an earlier release is converted
+  to this backoff on the next enabled tick (recorded in `lastRecovery`).
 - The dataset limit is 1,000 items/run; storage halts at 25,000 distinct posts.
   Review disk capacity and archive deliberately. Deleting the database resets
   dedup and spending history; never use that as an automated recovery action.

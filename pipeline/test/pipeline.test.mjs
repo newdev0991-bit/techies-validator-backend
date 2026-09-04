@@ -246,12 +246,31 @@ test('canary lifetime limits cannot restart paid work after midnight',async t=>{
   await ingest(f);await f.runner.tick();await f.runner.tick();f.advance(86400000);
   assert.equal((await f.runner.tick()).status,'total_search_limit');assert.equal(f.calls.start,1);assert.equal(f.calls.validate,1);
 });
-test('three incomplete cycles stop recurring searches after preserving their audit',async t=>{
-  const f=fixture(t,[]);f.p.summary=async()=>({success:false,partial:true});
-  for(let i=0;i<3;i++){
-    await ingest(f);const r=await f.runner.tick();assert.equal(r.status,i===2?'halted':'cycle_complete');f.advance(300000);
+test('consecutive incomplete searches back off with growing delays and never halt automatic search',async t=>{
+  const f=fixture(t,[]);f.c.searchIntervalSeconds=3600;f.p.summary=async()=>({success:false,partial:true});
+  const delays=[300,600,1200,2400,3600,3600];
+  for(let i=0;i<delays.length;i++){
+    await ingest(f);const r=await f.runner.tick();
+    assert.equal(r.status,'cycle_complete');assert.equal(r.searchOutcome,'failed');assert.equal(r.incompleteSearches,i+1);
+    assert.equal(f.s.get('halted'),null);assert.equal(f.s.get('incompleteSearches'),i+1);
+    assert.equal(f.s.get('nextSearchAt'),f.now()+delays[i]*1000);assert.equal(r.nextSearchAt,f.s.get('nextSearchAt'));
+    assert.equal((await f.runner.tick()).status,'waiting');f.advance(delays[i]*1000);
   }
-  assert.equal(f.s.get('halted').code,'REPEATED_INCOMPLETE_SEARCHES');await f.runner.tick();assert.equal(f.calls.start,3);
+  assert.equal(f.calls.start,delays.length);
+  assert.equal(f.s.db.prepare('SELECT count(*) AS n FROM runs').get().n,delays.length);
+});
+test('a stored REPEATED_INCOMPLETE_SEARCHES halt converts to search backoff and resumes without manual recovery',async t=>{
+  const f=fixture(t);f.c.searchIntervalSeconds=3600;
+  const halt={code:'REPEATED_INCOMPLETE_SEARCHES',at:NOW-600000};
+  f.s.set('halted',halt);f.s.set('incompleteSearches',3);f.s.set('nextSearchAt',NOW-1000);f.s.set('queryIndex',4);
+  assert.equal((await f.runner.tick()).status,'waiting');
+  assert.equal(f.s.get('halted'),null);assert.equal(f.s.get('nextSearchAt'),halt.at+1200000);
+  assert.equal(f.s.get('incompleteSearches'),3);assert.deepEqual(f.s.get('lastRecovery').originalHalt,halt);
+  assert.equal(f.calls.start,0);assert.equal(f.calls.preflight,0);
+  f.advance(600000);assert.equal((await f.runner.tick()).status,'search_started');assert.equal(f.calls.start,1);
+  assert.equal(f.s.get('queryIndex'),5);
+  assert.equal((await f.runner.tick()).status,'search_ingested');assert.equal((await f.runner.tick()).status,'validated');
+  assert.equal((await f.runner.tick()).status,'cycle_complete');assert.equal(f.s.get('incompleteSearches'),0);
 });
 test('unverified contact or search-only date never enters enriched CSV; exports age out stale proofs',async t=>{
   const f=fixture(t,[post('1'),post('2'),post('3')]);await ingest(f);
@@ -347,7 +366,7 @@ test('idle preflight recovery verifies again on apply and preserves all usage an
   for(let i=0;i<12;i++)f.s.charge('2026-09-03','searches');
   for(let i=0;i<28;i++)f.s.charge('2026-09-03','validations');
   f.s.insert('saved','prior',post(),{'Company Name':'Saved'},NOW);
-  f.s.set('halted',{code:'PROVIDER_CONNECTION_UNCERTAIN',at:NOW});f.s.set('incompleteSearches',1);f.s.set('queryIndex',2);
+  f.s.set('halted',{code:'PROVIDER_CONNECTION_UNCERTAIN',at:NOW});f.s.set('incompleteSearches',3);f.s.set('queryIndex',2);
   const before=f.s.snapshot();let flushes=0;f.s.flush=async()=>{flushes++;};
   const plan=await recover('recover-preflight',[],f.c,f.s,f.p);
   assert.equal(plan.eligible,true);assert.deepEqual(f.s.snapshot(),before);assert.equal(flushes,0);
@@ -357,16 +376,16 @@ test('idle preflight recovery verifies again on apply and preserves all usage an
   f.p.preflight=async()=>{f.calls.preflight++;};
   assert.equal((await recover('recover-preflight',['--apply'],f.c,f.s,f.p)).status,'recovered');
   assert.equal(f.s.get('halted'),null);assert.equal(flushes,1);assert.equal(f.calls.preflight,2);
-  assert.deepEqual({...f.s.totals()},{searches:12,validations:28});assert.equal(f.s.get('incompleteSearches'),1);
+  assert.deepEqual({...f.s.totals()},{searches:12,validations:28});assert.equal(f.s.get('incompleteSearches'),3);
   assert.equal(f.s.get('queryIndex'),2);assert.deepEqual(f.s.snapshot().leads,before.leads);
   assert.deepEqual(f.s.snapshot().daily,before.daily);assert.deepEqual(f.s.snapshot().runs,before.runs);
   assert.equal(f.calls.start,0);assert.equal(f.calls.validate,0);
 });
 
-test('preflight recovery refuses active, uncertain, unrelated or repeatedly failed work',async t=>{
+test('preflight recovery refuses active, uncertain or unrelated work',async t=>{
   const cases=[['cycle',{phase:'starting'}],['cycle',{phase:'searching'}],['batch',{phase:'sending'}],
     ['batch',{phase:'ready'}],['halted',{code:'VALIDATION_RESULT_UNCERTAIN'}],['halted',{code:'SEARCH_START_UNCERTAIN'}],
-    ['halted',{code:'REPEATED_INCOMPLETE_SEARCHES'}],['incompleteSearches',3]];
+    ['halted',{code:'REPEATED_INCOMPLETE_SEARCHES'}]];
   for(const [key,value] of cases) {
     const f=fixture(t);f.c.enabled=false;f.s.set('halted',{code:'PROVIDER_CONNECTION_UNCERTAIN'});f.s.set(key,value);
     const before=f.s.snapshot();assert.equal((await recover('recover-preflight',[],f.c,f.s,f.p)).eligible,false);

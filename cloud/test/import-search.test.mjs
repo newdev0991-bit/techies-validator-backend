@@ -53,21 +53,21 @@ test('import receipt survives checkpoint failure without repeating the search co
   assert.equal(f.s.get('cycle').phase,'ingesting');assert.equal(f.s.totals().searches,1);
   assert.equal((await controllerOperation(f.input,f.c,f.s,f.p,f.runner)).status,'already_imported');
 });
-test('empty failed search is audited and imported completion preserves automatic-search halt',async t=>{
-  const f=fixture(t);f.c.enabled=true;
+test('empty failed search is audited; imported completion keeps failure history and backoff without halting automatic search',async t=>{
+  const f=fixture(t);f.c.enabled=true;f.s.set('nextSearchAt',0);
   f.s.set('cycle',{id:'old',runId:'failed0',phase:'validating',total:0,offset:0,runStatus:'FAILED',searchComplete:false});
   f.s.set('incompleteSearches',2);
   const before=f.s.snapshot();
   const plan=await controllerOperation({...f.input,operation:'import-search-plan'},f.c,f.s,f.p,f.runner);
   assert.equal(plan.finalizesEmptyCycle,'failed0');assert.deepEqual(f.s.snapshot(),before);
-  await controllerOperation(f.input,f.c,f.s,f.p,f.runner);
-  assert.equal(f.s.get('incompleteSearches'),3);
-  const halt=f.s.get('halted');assert.equal(halt.code,'REPEATED_INCOMPLETE_SEARCHES');
+  const applied=Date.now();await controllerOperation(f.input,f.c,f.s,f.p,f.runner);
+  assert.equal(f.s.get('incompleteSearches'),3);assert.equal(f.s.get('halted'),null);
+  const retryAt=f.s.get('nextSearchAt');assert.ok(retryAt>=applied+f.c.searchIntervalSeconds*1000 && retryAt<=Date.now()+f.c.searchIntervalSeconds*1000);
   assert.equal(JSON.parse(f.s.db.prepare('SELECT record FROM runs WHERE id=?').get('old').record).phase,'complete');
   let validations=0;f.runner.validateBatch=async batch=>{validations++;assert.equal(batch.ids.length,1);
     f.s.complete(batch.ids[0],{status:'REJECTED'});f.s.set('batch',null);return {status:'validated'};};
   assert.equal((await f.runner.work()).status,'validated');assert.equal(validations,1);
   assert.equal((await f.runner.work()).status,'cycle_complete');
-  assert.equal(f.s.get('cycle'),null);assert.deepEqual(f.s.get('halted'),halt);assert.equal(f.s.get('incompleteSearches'),3);
-  assert.equal((await f.runner.work()).status,'halted');
+  assert.equal(f.s.get('cycle'),null);assert.equal(f.s.get('halted'),null);assert.equal(f.s.get('incompleteSearches'),3);
+  assert.equal((await f.runner.work()).status,'waiting');
 });

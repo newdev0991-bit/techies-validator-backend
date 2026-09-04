@@ -66,6 +66,18 @@ test('Console status uses terminal explanation and report survives an optional s
 });
 
 
+test('an incomplete search reports its retry time instead of a halt and claims no new leads',t=>{
+  const dir=mkdtempSync(path.join(os.tmpdir(),'cot-backoff-report-')),s=new Store(dir);t.after(()=>s.close());
+  const now=Date.parse('2026-09-03T13:40:00Z'),nextSearchAt=now+1200000;
+  s.set('incompleteSearches',3);s.set('nextSearchAt',nextSearchAt);
+  const config={...base,enabled:true},gates={enabled:true,blockers:[]};
+  const view=resultSnapshot(s,now,true,config,gates);
+  assert.equal(view.diagnostics.blockers.length,0);assert.equal(view.diagnostics.nextEligibleSearchAt,new Date(nextSearchAt).toISOString());
+  const report=controllerReport({status:'cycle_complete',runId:'run1',searchOutcome:'failed',incompleteSearches:3,nextSearchAt},view,config,gates,'store');
+  assert.match(report.message,/no usable posts/i);assert.match(report.message,/3 consecutive/);assert.match(report.message,/14:00:00/);
+  assert.ok(!/halt/i.test(report.message));assert.match(report.message,/cumulative/);
+});
+
 test('readiness reports explain attempts and next check without claiming new leads',t=>{
   const dir=mkdtempSync(path.join(os.tmpdir(),'cot-readiness-report-')),s=new Store(dir);t.after(()=>s.close());
   const now=Date.parse('2026-09-03T10:00:00Z'),nextAttemptAt=now+60000;
