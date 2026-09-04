@@ -20,7 +20,16 @@ export function apifyFailure(error) {
     404: ['APIFY_RESOURCE_NOT_FOUND', 'The configured Actor or build is unavailable to the backend token.'],
     429: ['APIFY_RATE_LIMIT', 'Apify rate-limited the request. Retry the saved batch later.']
   };
-  const [code, message] = categories[status] || ['APIFY_REQUEST_FAILED', 'Apify could not accept the batch request.'];
+  // A spend cap and a permission denial both arrive as 403. Only the type separates them,
+  // and sending an operator to check token permissions for an exhausted account wastes the
+  // one signal that would have fixed it in a minute.
+  const usageLimited = new Set([
+    'platform-feature-disabled', 'monthly-usage-hard-limit-reached', 'payment-required'
+  ]).has(type);
+  const [code, message] = usageLimited
+    ? ['APIFY_USAGE_LIMIT',
+       'Apify refused the request because the account usage limit or spend cap was reached. Raise the limit or wait for the billing cycle to reset.']
+    : categories[status] || ['APIFY_REQUEST_FAILED', 'Apify could not accept the batch request.'];
   return { status: 502, code, message, diagnostic: { providerStatus: status, providerType: type } };
 }
 
