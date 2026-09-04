@@ -41,10 +41,7 @@ export class Providers {
   async preflight() {
     if (!this.token) throw new ProviderError('APIFY_TOKEN_MISSING');
     if (!this.validatorToken) throw new ProviderError('VALIDATOR_TOKEN_MISSING');
-    // The validator sleeps when idle and a cold start regularly passes 30s. Timing out here
-    // costs a halt with no recovery path, while waiting costs one idle connection.
-    const caps = await this.request(`${this.c.validatorBaseUrl.replace(/\/$/,'')}/pipeline-capabilities`,
-      { token: this.validatorToken, timeout: 90000 });
+    const caps = await this.request(`${this.c.validatorBaseUrl.replace(/\/$/,'')}/pipeline-capabilities`, { token: this.validatorToken });
     if (caps?.contactEnrichment !== 'cot-contact-enrichment-v1' || caps?.batchContract !== 'cot-data-batch-v1'
         || caps.maxBatchSize < this.c.validationBatchSize
         || !Number.isFinite(caps.actorMaxChargeUsd) || caps.actorMaxChargeUsd <= 0
