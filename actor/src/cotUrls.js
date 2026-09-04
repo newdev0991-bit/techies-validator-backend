@@ -61,3 +61,37 @@ export function cotUrlIdentity(value) {
 
 export function cotPostKey(value) { return cotUrlIdentity(value)?.key || ''; }
 export function cotPageReadUrl(value) { return cotUrlIdentity(value)?.parentUrl || cotUrlIdentity(value)?.readUrl || value; }
+
+// Derive the page that owns a post URL. A page post belongs to its page; a group post
+// belongs to no page at all.
+export function derivePageUrlFromPostUrl(postUrl) {
+    try {
+        const u = new URL(postUrl);
+
+        // A group post belongs to a group, not to a business page, and a share link
+        // names no owner at all. Neither has an owning page to derive, and guessing one
+        // would attribute the post to a page that never published it.
+        if (/^\/(?:groups|share)(?:\/|$)/i.test(u.pathname)) return null;
+
+        // Case 1: Pretty username posts
+        const m1 = u.pathname.match(/^\/([^/]+)\/posts\//);
+        if (m1) return `https://www.facebook.com/${m1[1]}`;
+
+        // Case 2: profile.php?id=...
+        if (u.pathname.includes('/profile.php') && u.searchParams.get('id')) {
+            return `https://www.facebook.com/profile.php?id=${u.searchParams.get('id')}`;
+        }
+
+        // Case 3: Watch or Reel - cannot derive directly
+        if (u.pathname.startsWith('/watch') || u.pathname.startsWith('/reel')) {
+            return null;  // must be resolved from DOM
+        }
+
+        // Fallback: strip query params
+        u.search = '';
+        u.hash = '';
+        return u.toString();
+    } catch {
+        return null;
+    }
+}

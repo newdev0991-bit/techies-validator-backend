@@ -7,6 +7,7 @@ import { Actor } from 'apify';
 import { gotScraping } from 'got-scraping';
 import { toCotProofOutput } from './cotProof.js';
 import { readCotProof } from './cotReader.js';
+import { derivePageUrlFromPostUrl } from './cotUrls.js';
 
 import { canonicalizeAcceptedActivityObservations, describeActivityStory } from './activityScanPolicy.js';
 import { buildActorRequests } from './batchRequests.js';
@@ -18,32 +19,6 @@ import { TIMELINE_TIME_SOURCE } from './facebookTimelineFeed.js';
 import { fetchGoogleSerp } from './googleSerp.js';
 import { htmlToVisibleText, readHtmlAnchors, readHtmlTitle } from './htmlText.js';
 
-function derivePageUrlFromPostUrl(postUrl) {
-  try {
-    const u = new URL(postUrl);
-
-    // Case 1: Pretty username posts
-    const m1 = u.pathname.match(/^\/([^/]+)\/posts\//);
-    if (m1) return `https://www.facebook.com/${m1[1]}`;
-
-    // Case 2: profile.php?id=...
-    if (u.pathname.includes('/profile.php') && u.searchParams.get('id')) {
-      return `https://www.facebook.com/profile.php?id=${u.searchParams.get('id')}`;
-    }
-
-    // Case 3: Watch or Reel ? cannot derive directly
-    if (u.pathname.startsWith('/watch') || u.pathname.startsWith('/reel')) {
-      return null;  // must be resolved from DOM
-    }
-
-    // Fallback: strip query params
-    u.search = '';
-    u.hash = '';
-    return u.toString();
-  } catch {
-    return null;
-  }
-}
 
 function canonicalizeFacebookUrl(rawUrl) {
   if (!rawUrl) return '';
