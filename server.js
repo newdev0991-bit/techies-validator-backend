@@ -947,6 +947,12 @@ export function createCotBatchHandler({
         console.error(`[validate-batch] ${JSON.stringify(providerFailure.diagnostic)}`);
         return sendError(res, providerFailure.status, providerFailure.code, providerFailure.message);
       }
+      // A required setting that is absent is an operator fix, not an outage. Its own
+      // message names the variable; nothing else about the error is echoed back.
+      if (error?.code === 'BACKEND_NOT_CONFIGURED') {
+        console.error('[validate-batch] Backend is not fully configured.');
+        return sendError(res, 503, 'BACKEND_NOT_CONFIGURED', error.message);
+      }
       // The HTTP response stays opaque, but the server log must name the cause.
       // This line firing with no detail is why a recurring production halt could
       // not be diagnosed: the pipeline turns any 500 here into

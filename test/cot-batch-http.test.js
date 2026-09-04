@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { createCotBatchHandler } from '../server.js';
+import { cotActorPhaseOptions } from '../src/pipeline-capabilities.js';
 
 function responseRecorder() {
   return {
@@ -167,4 +168,33 @@ test('an unexpected batch failure logs its cause but does not leak it to the cal
   assert.match(all, /Unexpected non-provider error/);
   assert.match(all, /AbortError/);
   assert.match(all, /hard deadline/);
+});
+
+test('a missing required setting is reported as configuration, not a generic failure', async () => {
+  // COT_ACTOR_MAX_CHARGE_USD is required by cotActorPhaseOptions and throws before any
+  // Apify call. Reported as a bare 500 it is indistinguishable from a broken scraper,
+  // which is exactly how an unset variable stayed hidden through a whole deployment.
+  const handler = createCotBatchHandler({
+    completedBatchesMap: new Map(), activeBatchesMap: new Map(),
+    runBatchFn: async () => cotActorPhaseOptions('proof', {})
+  });
+  const response = responseRecorder();
+  await handler({ body: batchBody() }, response);
+
+  assert.equal(response.statusCode, 503);
+  assert.equal(response.body.error.code, 'BACKEND_NOT_CONFIGURED');
+  assert.match(response.body.error.message, /COT_ACTOR_MAX_CHARGE_USD/);
+});
+
+test('an unrelated internal error still stays opaque', async () => {
+  const handler = createCotBatchHandler({
+    completedBatchesMap: new Map(), activeBatchesMap: new Map(),
+    runBatchFn: async () => { throw new Error('SECRET internal detail'); }
+  });
+  const response = responseRecorder();
+  await handler({ body: batchBody() }, response);
+
+  assert.equal(response.statusCode, 500);
+  assert.equal(response.body.error.code, 'BATCH_FAILED');
+  assert.doesNotMatch(JSON.stringify(response.body), /SECRET/);
 });
