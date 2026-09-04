@@ -9,7 +9,13 @@ export function pipelineActorOptions(env = process.env) {
 export function cotActorPhaseOptions(phase, env = process.env) {
   const total = pipelineActorOptions(env);
   // Never introduce a second unbounded paid call when the total cap is absent.
-  if (!total) throw new Error('COT_ACTOR_MAX_CHARGE_USD is required for strict contact lookup');
+  // Tagged so the caller can report a missing setting as configuration rather than
+  // burying it in a generic failure that looks identical to a broken scraper.
+  if (!total) {
+    const error = new Error('COT_ACTOR_MAX_CHARGE_USD is required for strict contact lookup');
+    error.code = 'BACKEND_NOT_CONFIGURED';
+    throw error;
+  }
   return { ...total, maxTotalChargeUsd: total.maxTotalChargeUsd / 2,
     timeout: phase === 'contacts' ? 180 : 120 };
 }
