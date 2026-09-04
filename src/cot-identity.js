@@ -6,6 +6,11 @@ const nameKey = value => text(value).normalize('NFKD').toLowerCase()
   .replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, ' ').trim();
 const referral = /\b(?:good luck to|shout[ -]?out to|visit our friends|check out (?:our friends|this business)|welcome (?:them|you) to)\b/i;
 const selfEvent = /\b(?:we(?:['’]re| are|['’]ve| have)?|our|us)\b[\s\S]{0,100}\b(?:open(?:ing|ed)?|mov(?:e|ed|ing)|relocat\w*|premises|management|ownership)\b/i;
+// An ownership or management handover is inherently about the business it names, and is
+// written without a pronoun far more often than not. The surrounding checks still decide
+// whose business it is: the model must claim the event as its own and name this business,
+// and the publisher must match. This only stops a pronoun being load-bearing on its own.
+const selfHandover = /\bunder new (?:ownership|management)\b/i;
 
 // A matched publisher is not proof that the event concerns that publisher.
 // Model claims may narrow supplied evidence; they cannot create identity proof.
@@ -37,7 +42,8 @@ export function evaluateCotIdentity(lead = {}, claim = {}) {
       (nameKey(businessName) === nameKey(company) || sameVerifiedBusiness(raw, businessName)) && nameKey(publisher) === nameKey(company) &&
       raw.business?.identityStatus === 'matched' && raw.scrape?.success === true &&
       raw.time_target_matched === true &&
-      (selfEvent.test(quoted) || (nameKey(company).length >= 4 && nameKey(quoted).includes(nameKey(company))))) {
+      (selfEvent.test(quoted) || selfHandover.test(quoted) ||
+        (nameKey(company).length >= 4 && nameKey(quoted).includes(nameKey(company))))) {
     status = 'matched';
     reason = 'The exact proof supports the candidate business as the subject of the event.';
   }
