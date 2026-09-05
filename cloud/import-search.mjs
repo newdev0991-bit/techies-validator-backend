@@ -21,9 +21,17 @@ export async function importSearch(input,c,s,p,runner) {
     if(run?.id!==runId || run.actId!==c.actorId || run.status!=='SUCCEEDED'
       || !run.defaultDatasetId || !run.defaultKeyValueStoreId || !Number.isFinite(Date.parse(run.startedAt))) throw new Error('IMPORT_RUN_MISMATCH');
     const source=await p.input(run.defaultKeyValueStoreId),summary=await p.summary(run.defaultKeyValueStoreId);
-    const allowed=new Set([...Object.keys(c.searchInput),'query','googleFallbackBudgetMs','googleSearchTimeoutMs']);
+    const allowed=new Set([...Object.keys(c.searchInput),'query','maxAuthorRequests','authorTimeoutMs',
+      'includeGoogleFallback','googleFallbackBudgetMs','googleSearchTimeoutMs']);
     if(!source || Object.keys(source).some(k=>!allowed.has(k))) throw new Error('IMPORT_INPUT_MISMATCH');
-    if(!c.queries.includes(source?.query) || Object.keys(c.searchInput).some(k=>!isDeepStrictEqual(source?.[k],c.searchInput[k]))) throw new Error('IMPORT_INPUT_MISMATCH');
+    // An explicit completed-run manifest can differ from future search limits.
+    // It is compared exactly and is never copied into controller CONFIG or used
+    // to start a search. Dataset and successful-run evidence limits still apply.
+    if (input.expectedSearchInput !== undefined) {
+      if (!input.expectedSearchInput || Array.isArray(input.expectedSearchInput)
+        || typeof source.query !== 'string' || !source.query.trim() || source.query.length > 500
+        || !isDeepStrictEqual(source,input.expectedSearchInput)) throw new Error('IMPORT_INPUT_MISMATCH');
+    } else if(!c.queries.includes(source?.query) || Object.keys(c.searchInput).some(k=>!isDeepStrictEqual(source?.[k],c.searchInput[k]))) throw new Error('IMPORT_INPUT_MISMATCH');
     const meta=await p.dataset(run.defaultDatasetId);
     if(!Number.isSafeInteger(meta?.itemCount) || meta.itemCount<1 || meta.itemCount>c.maxDatasetItems
       || summary?.schemaVersion!=='facebook-search-run-v1' || summary.success!==true || summary.partial!==false

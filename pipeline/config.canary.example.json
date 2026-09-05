@@ -5,7 +5,7 @@
   "actorId": "53bGXKeIhVmNMTCi4",
   "validatorBaseUrl": "https://techies-validator-backend-i71b.onrender.com",
   "tickSeconds": 60,
-  "searchIntervalSeconds": 300,
+  "searchIntervalSeconds": 60,
   "queries": [
     "opening soon",
     "new premises",

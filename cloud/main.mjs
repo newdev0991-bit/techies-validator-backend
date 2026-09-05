@@ -10,6 +10,7 @@ import { CloudLease,CloudState } from './state.mjs';
 import { resultSnapshot } from './results.mjs';
 import { processingGates,controllerReport,publishReport } from './report.mjs';
 import { controllerOperation } from './operations.mjs';
+import { deliveryConfig, deliverReady } from '../pipeline/delivery.mjs';
 
 // No new long-lived Apify secret is needed inside the Actor: use its run token.
 const client=new ApifyClient({token:process.env.APIFY_TOKEN,maxRetries:0,timeoutSecs:30});
@@ -52,9 +53,16 @@ if(!await lease.acquire()) {
       providers[method]=async(...args)=>{await lease.renew();await lease.assert();return original(...args);};
     }
     const runner=new Runner(config,store,providers);
-    const outcome=await controllerOperation(input,config,store,providers,runner);
+    const beforeDelivery=async()=>{await lease.renew();await lease.assert();};
+    const outcome=await controllerOperation(input,config,store,providers,runner,{beforeDelivery});
+    if ((!input.operation || input.operation==='tick') && config.enabled && process.env.TECHIES_DELIVERY_ENABLED==='true') {
+      const delivery=await deliverReady(store,deliveryConfig(),{beforeSend:async()=>{await lease.renew();await lease.assert();}});
+      store.set('lastDelivery',delivery);
+      await store.flush();
+    }
     await lease.assert();
     const view=resultSnapshot(store,Date.now(),config.enabled,config,gates);
+    view.delivery=store.get('lastDelivery');
     // One record is the coherent frontend view. Never expose raw responses or credentials.
     if(Buffer.byteLength(JSON.stringify(view))>8*1024*1024) throw new Error('CLOUD_RESULT_SIZE_LIMIT');
     await kv.setRecord({key:'RESULTS',value:view});

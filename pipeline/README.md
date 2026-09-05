@@ -57,7 +57,7 @@ One-minute scheduler tick
   -> persist raw posts, deduplicate post IDs
   -> COT exact-post validation + observed phone/address evidence
   -> enriched.csv / review.csv / rejected.csv
-  -> wait at least five minutes, rotate keyword, repeat
+  -> wait at least one minute, rotate keyword, repeat
 ```
 
 The one-minute tick advances an existing cycle. It does not launch a fresh

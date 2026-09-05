@@ -37,6 +37,25 @@ test('standalone import plans without mutation and durably queues a deduplicated
   assert.equal((await controllerOperation(f.input,f.c,f.s,f.p,f.runner)).status,'already_imported');
   assert.equal(f.s.totals().searches,1);
 });
+
+test('explicit completed-run input imports without changing future search configuration',async t=>{
+  const f=fixture(t),before=structuredClone(f.c);
+  Object.assign(f.source,{maxPages:55,maxRequests:80,maxRetries:3,query:'opening soon, new premises'});
+  f.post.query=f.source.query;f.summary.query=f.source.query;
+  await assert.rejects(()=>controllerOperation(f.input,f.c,f.s,f.p,f.runner),/INPUT_MISMATCH/);
+  f.input.expectedSearchInput=structuredClone(f.source);
+  assert.equal((await controllerOperation({...f.input,operation:'import-search-plan'},f.c,f.s,f.p,f.runner)).total,1);
+  assert.equal((await controllerOperation(f.input,f.c,f.s,f.p,f.runner)).total,1);
+  assert.deepEqual(f.c,before);assert.equal(f.s.totals().validations,0);
+});
+
+test('explicit input manifest still rejects altered or unsupported input',async t=>{
+  const f=fixture(t);f.input.expectedSearchInput=structuredClone(f.source);
+  f.input.expectedSearchInput.maxPages++;
+  await assert.rejects(()=>controllerOperation(f.input,f.c,f.s,f.p,f.runner),/INPUT_MISMATCH/);
+  f.source.cookie='forbidden';f.input.expectedSearchInput=structuredClone(f.source);
+  await assert.rejects(()=>controllerOperation(f.input,f.c,f.s,f.p,f.runner),/INPUT_MISMATCH/);
+});
 test('import refuses active work, activation, mismatched evidence and unsafe input without mutation',async t=>{
   for(const mutate of [f=>{f.input.enabled=true;},f=>f.s.set('cycle',{phase:'starting'}),
     f=>f.s.set('halted',{code:'VALIDATION_RESULT_UNCERTAIN'}),f=>{f.run.actId='other';},
