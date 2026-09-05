@@ -17,3 +17,10 @@ export function searchOutcome(cycle) {
     && ['FAILED','SUCCEEDED'].includes(cycle.runStatus);
   return limit && matching ? 'bounded_partial' : 'failed';
 }
+
+// An incomplete search is usually Facebook rejecting the first request. Retry
+// after 5, 10, 20, 40 minutes..., never later than the configured interval; a
+// later usable search resets the count. Daily limits still bound the spend.
+export function incompleteSearchDelaySeconds(failures, intervalSeconds) {
+  return Math.min(intervalSeconds, 300 * 2 ** Math.min(Math.max(failures, 1) - 1, 10));
+}

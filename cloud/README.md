@@ -155,13 +155,16 @@ For an existing idle PROVIDER_CONNECTION_UNCERTAIN or PREFLIGHT_RETRIES_EXHAUSTE
 halt, pause the controller schedule before maintenance. With Allow processing off,
 run preflight-recovery-plan, inspect OUTPUT.recovery, then run recover-preflight.
 The apply operation repeats the provider checks and refuses any outstanding cycle
-or batch, unrelated halt, or three incomplete searches. It saves through the normal
+or batch or an unrelated halt. It saves through the normal
 cloud lease and checkpoint, preserving leads, deduplication, counters, query
 position, and incomplete-search history. It submits no paid search or validation.
 The controller invocation and storage operations can still incur platform costs.
 
 Resume the schedule only within the approved collection budget. Merely deploying
-this change does not clear an existing halt. This does not repair Facebook HTTP 400
-responses from the separate search Actor. For local state, the equivalent commands
+this change does not clear an existing readiness halt. Facebook HTTP 400 responses
+from the separate search Actor are not repaired here; an incomplete search is
+retried with a 5-40 minute backoff (see pipeline/README.md) instead of halting,
+and a stored REPEATED_INCOMPLETE_SEARCHES halt converts to that backoff on the
+next enabled tick. For local state, the equivalent commands
 are node pipeline/cli.mjs recover-preflight and the same command with --apply; local
 commands do not modify the cloud state.
