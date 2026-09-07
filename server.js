@@ -947,7 +947,19 @@ export function createCotBatchHandler({
         console.error(`[validate-batch] ${JSON.stringify(providerFailure.diagnostic)}`);
         return sendError(res, providerFailure.status, providerFailure.code, providerFailure.message);
       }
-      console.error('[validate-batch] Unexpected non-provider error.');
+      // The HTTP response stays opaque, but the server log must name the cause.
+      // This line firing with no detail is why a recurring production halt could
+      // not be diagnosed: the pipeline turns any 500 here into
+      // VALIDATION_RESULT_UNCERTAIN and stops until an operator reconciles, and
+      // the only evidence was the words "Unexpected non-provider error".
+      // Render logs are private to the workspace; the no-serialize rule in
+      // src/apify-errors.js governs what leaves over HTTP, not what we can see.
+      console.error('[validate-batch] Unexpected non-provider error.', JSON.stringify({
+        name: String(error?.name || 'unknown').slice(0, 80),
+        message: String(error?.message || '').slice(0, 300),
+        code: String(error?.code || '').slice(0, 80)
+      }));
+      if (error?.stack) console.error(String(error.stack).split('\n').slice(0, 8).join('\n'));
       return sendError(res, 500, 'BATCH_FAILED', 'Batch validation failed.');
     }
   };
