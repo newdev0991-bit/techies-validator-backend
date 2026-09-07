@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from 'node:util';
 import { searchLead } from '../pipeline/records.mjs';
+import { incompleteSearchDelaySeconds } from '../pipeline/search-outcome.mjs';
 
 // Import existing output only. Normal controller ticks own all paid validation.
 export async function importSearch(input,c,s,p,runner) {
@@ -53,8 +54,7 @@ export async function importSearch(input,c,s,p,runner) {
         s.auditRun({...previous,phase:'complete',completedAt:Date.now()});
         const failures=previous.searchComplete===true?0:s.get('incompleteSearches',0)+1;
         s.set('incompleteSearches',failures);
-        s.set('nextSearchAt',Date.now()+c.searchIntervalSeconds*1000);
-        if(failures>=3 && !halt) s.set('halted',{code:'REPEATED_INCOMPLETE_SEARCHES',at:Date.now()});
+        s.set('nextSearchAt',Date.now()+(failures ? incompleteSearchDelaySeconds(failures,c.searchIntervalSeconds) : c.searchIntervalSeconds)*1000);
       }
       s.charge(run.startedAt.slice(0,10),'searches');s.set('cycle',cycle);s.auditRun(cycle);
     });

@@ -25,6 +25,48 @@ function batchBody(name = 'Alpha') {
   };
 }
 
+test('deadline retains batch ownership and replays late success without a second provider call', async () => {
+  let resolveWork, calls = 0;
+  const active = new Map();
+  const handler = createCotBatchHandler({
+    deadlineMs: 10, activeBatchesMap: active, completedBatchesMap: new Map(),
+    runBatchFn: () => { calls++; return new Promise(resolve => { resolveWork = resolve; }); }
+  });
+  const first = responseRecorder();
+  await handler({ body: batchBody() }, first);
+  assert.equal(first.statusCode, 503);
+  assert.equal(active.size, 1);
+  const retry = responseRecorder();
+  await handler({ body: batchBody() }, retry);
+  assert.equal(retry.statusCode, 503);
+  assert.equal(calls, 1);
+  const conflict = responseRecorder();
+  await handler({ body: batchBody('Different') }, conflict);
+  assert.equal(conflict.statusCode, 409);
+  const response = { success: true, batchId: 'cot:test:0', results: [] };
+  resolveWork(response);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(active.size, 0);
+  const completed = responseRecorder();
+  await handler({ body: batchBody() }, completed);
+  assert.deepEqual(completed.body, response);
+  assert.equal(calls, 1);
+});
+
+test('late provider rejection after a deadline releases ownership without an unhandled rejection', async () => {
+  let rejectWork;
+  const active = new Map();
+  const handler = createCotBatchHandler({
+    deadlineMs: 10, activeBatchesMap: active, completedBatchesMap: new Map(),
+    runBatchFn: () => new Promise((_, reject) => { rejectWork = reject; })
+  });
+  await handler({ body: batchBody() }, responseRecorder());
+  assert.equal(active.size, 1);
+  rejectWork(new Error('provider ended'));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(active.size, 0);
+});
+
 test('COT handler reports safe Apify rejection instead of a generic 500', async () => {
   const handler = createCotBatchHandler({
     completedBatchesMap: new Map(), activeBatchesMap: new Map(),

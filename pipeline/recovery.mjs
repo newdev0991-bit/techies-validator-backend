@@ -8,7 +8,6 @@ export async function preflightRecoveryReport(s,c,p) {
   if (!preflightHalts.has(halt?.code)) blockers.push('HALT_NOT_ELIGIBLE');
   // This recovery is solely for an idle controller, never outstanding paid work.
   if (s.get('cycle') || s.get('batch')) blockers.push('WORK_IN_PROGRESS');
-  if (s.get('incompleteSearches',0)>=3) blockers.push('REPEATED_INCOMPLETE_SEARCHES');
   if (!blockers.length) {
     try { await p.preflight(); }
     catch (error) {

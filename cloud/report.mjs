@@ -18,6 +18,8 @@ export function controllerReport(outcome,view,config,gates,storageId) {
     ? `Paused: ${gates.blockers.join('; ')}. ${savedLeadCount} saved leads. No search or validation attempted.`
     : status==='total_search_limit'||status==='total_validation_limit'
       ? `Lifetime allowance exhausted (${status==='total_search_limit'?'search':'validation'}). ${savedLeadCount} saved leads. New work needs an approved budget; do not reset counters.`
+      : outcome.searchOutcome==='failed' && outcome.incompleteSearches
+        ? `Search returned no usable posts (${outcome.incompleteSearches} consecutive). Next attempt: ${new Date(outcome.nextSearchAt).toISOString()}. ${savedLeadCount} saved leads; these are cumulative, not new results from this run.`
       : status==='preflight_retry'||status==='preflight_backoff'
         ? `Readiness check delayed (${safeCode(outcome.code)}), ${outcome.attempts}/3 attempts used. Next check: ${new Date(outcome.nextAttemptAt).toISOString()}. No search or validation submitted. ${savedLeadCount} saved leads.`
       : `Controller step: ${safeCode(status)}${outcome.code?` (${safeCode(outcome.code)})`:''}. ${savedLeadCount} saved leads; these are cumulative, not new results from this run.`;

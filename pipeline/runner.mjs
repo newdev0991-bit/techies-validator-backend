@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { searchLead, qualifySearchPost, validateResponse, assess } from './records.mjs';
 import { exportFiles } from './exports.mjs';
-import { searchOutcome } from './search-outcome.mjs';
+import { searchOutcome, incompleteSearchDelaySeconds } from './search-outcome.mjs';
 import { transientPreflightError } from './providers.mjs';
 
 const TERMINAL = new Set(['SUCCEEDED','FAILED','ABORTED','TIMED-OUT']);
@@ -42,10 +42,15 @@ export class Runner {
     if (!c.enabled) return { status: 'disabled' };
     let cycle=s.get('cycle');
     const halt=s.get('halted');
-    // A verified explicit import may finish validation while automatic search
-    // remains halted. It cannot start a search or clear the search failure history.
-    if (halt && !(halt.code==='REPEATED_INCOMPLETE_SEARCHES' && cycle?.origin==='standalone_import'
-      && ['ingesting','validating'].includes(cycle.phase))) return { status: 'halted', ...halt };
+    if (halt?.code==='REPEATED_INCOMPLETE_SEARCHES') {
+      // Earlier releases stopped for good after three incomplete searches. That is
+      // now a retry backoff: convert the stored halt once and keep the history.
+      const retryAt=(halt.at || now)+incompleteSearchDelaySeconds(s.get('incompleteSearches',0),c.searchIntervalSeconds)*1000;
+      s.transaction(()=>{
+        s.set('halted',null); s.set('nextSearchAt',Math.max(s.get('nextSearchAt',0),retryAt));
+        s.set('lastRecovery',{at:now,command:'automatic_search_backoff',originalHalt:halt,totals:s.totals()});
+      });
+    } else if (halt) return { status: 'halted', ...halt };
     if (cycle?.phase === 'starting') return this.halt('SEARCH_START_UNCERTAIN');
     const batch=s.get('batch');
     if (batch?.phase === 'sending') return this.halt('VALIDATION_RESULT_UNCERTAIN');
@@ -78,9 +83,9 @@ export class Runner {
         return {status:'cycle_complete',runId:cycle.runId,searchOutcome:outcome};
       }
       const failures=outcome === 'failed' ? s.get('incompleteSearches',0)+1 : 0;
-      s.transaction(()=>{ s.set('cycle',null); s.set('nextSearchAt',now+c.searchIntervalSeconds*1000); s.set('incompleteSearches',failures); });
-      if(failures>=3) return this.halt('REPEATED_INCOMPLETE_SEARCHES');
-      return {status:'cycle_complete',runId:cycle.runId,searchOutcome:outcome};
+      const nextSearchAt=now+(failures ? incompleteSearchDelaySeconds(failures,c.searchIntervalSeconds) : c.searchIntervalSeconds)*1000;
+      s.transaction(()=>{ s.set('cycle',null); s.set('nextSearchAt',nextSearchAt); s.set('incompleteSearches',failures); });
+      return {status:'cycle_complete',runId:cycle.runId,searchOutcome:outcome,...(failures ? {incompleteSearches:failures,nextSearchAt} : {})};
     }
     if (now < s.get('nextSearchAt',0)) return {status:'waiting'};
     if (c.maxSearchRunsTotal && s.totals().searches >= c.maxSearchRunsTotal) return {status:'total_search_limit'};

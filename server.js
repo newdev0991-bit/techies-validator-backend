@@ -41,6 +41,12 @@ const app = express();
 const PORT = process.env.PORT || 4000;
 app.set('trust proxy', 1);
 
+// Pin the Facebook scraper actor build. The default (`latest`) tag was moved to a
+// build on 2026-09-07 whose input schema rejects our contract with HTTP 400
+// invalid-input, which halted the standalone pipeline. 0.0.54 is the last known
+// good build; override with APIFY_ACTOR_BUILD once `latest` is trustworthy again.
+const APIFY_ACTOR_BUILD = process.env.APIFY_ACTOR_BUILD || '0.0.54';
+
 /* ---------- CORS allowlist (Vercel + localhost) ---------- */
 const configuredOrigins = [process.env.FRONTEND_ORIGIN, process.env.ALLOWED_ORIGINS]
   .filter(Boolean)
@@ -117,6 +123,20 @@ class PublicError extends Error {
 
 function sendError(res, status, code, message) {
   return res.status(status).json({ error: { code, message } });
+}
+
+// Hard ceiling around an async step. Races `promise` against a timer; if the
+// timer wins, the returned promise rejects with `onTimeout()` while the original
+// keeps running to completion in the background (there is nothing safe to
+// cancel). Used to stop a wedged provider socket or a never-resolving SDK poll
+// from holding a request open until the caller's own abort — by which point the
+// whole cycle is wasted.
+function withDeadline(promise, ms, onTimeout) {
+  let timer;
+  const deadline = new Promise((_resolve, reject) => {
+    timer = setTimeout(() => reject(onTimeout()), ms);
+  });
+  return Promise.race([promise, deadline]).finally(() => clearTimeout(timer));
 }
 
 function configuredCotBatchSize(value = process.env.COT_BATCH_SIZE) {
@@ -368,11 +388,20 @@ async function analyzeLead(lead) {
     max: 120_000
   });
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const abortTimer = setTimeout(() => controller.abort(), timeoutMs);
+  // Belt and braces: aborting the fetch signal does not always unblock a body
+  // read that is stuck on a half-open upstream socket. This hard race rejects
+  // regardless, and also fires the abort so the socket is actually torn down.
+  const hardTimeout = () => {
+    controller.abort();
+    return Object.assign(new Error('OpenAI request exceeded its hard deadline.'), {
+      name: 'AbortError'
+    });
+  };
   let r;
   let raw;
   try {
-    r = await fetch(base, {
+    r = await withDeadline(fetch(base, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -389,15 +418,15 @@ async function analyzeLead(lead) {
         max_tokens: 900,
         response_format: { type: 'json_object' }
       })
-    });
-    raw = await r.text();
+    }), timeoutMs + 5_000, hardTimeout);
+    raw = await withDeadline(r.text(), 15_000, hardTimeout);
   } catch (error) {
     if (error?.name === 'AbortError') {
       throw new PublicError(504, 'OPENAI_TIMEOUT', 'Lead analysis timed out. Please try again.');
     }
     throw new PublicError(502, 'OPENAI_UNAVAILABLE', 'Lead analysis provider is unavailable.');
   } finally {
-    clearTimeout(timeout);
+    clearTimeout(abortTimer);
   }
 
   if (!r.ok) {
@@ -488,7 +517,7 @@ async function runFacebookActor(lead, options = {}) {
   }
   normalizedLead.link = linkValidation.value;
 
-  const client = new ApifyClient({ token: APIFY_API_TOKEN });
+  const client = new ApifyClient({ token: APIFY_API_TOKEN, maxRetries: 0, timeoutSecs: 30 });
   const actorId = process.env.APIFY_ACTOR_ID || 'J8wBqFJa8GQo9RJ5J';
   const actorClient = client.actor(actorId);
   const activityWindowDays = parsePositiveNumber(
@@ -519,7 +548,7 @@ async function runFacebookActor(lead, options = {}) {
       includePageDetails: true,
       includePreviousPosts: true
     },
-    { waitSecs }
+    { waitSecs, build: APIFY_ACTOR_BUILD, log: null }
   );
   const runStatus = typeof run?.status === 'string' ? run.status.toUpperCase() : '';
   if (['READY', 'RUNNING'].includes(runStatus)) {
@@ -600,7 +629,7 @@ async function runFacebookActorBatch(rows, phase = 'proof') {
   });
 
   // Never automatically replay an Actor-start POST whose paid outcome is uncertain.
-  const client = new ApifyClient({ token, maxRetries: 0 });
+  const client = new ApifyClient({ token, maxRetries: 0, timeoutSecs: 30 });
   const actorId = process.env.APIFY_ACTOR_ID || 'J8wBqFJa8GQo9RJ5J';
   const activityWindowDays = parsePositiveNumber(process.env.COT_ACTIVITY_WINDOW_DAYS, 1, {
     min: 1,
@@ -620,7 +649,10 @@ async function runFacebookActorBatch(rows, phase = 'proof') {
   });
 
   console.log(`[facebook-actor-batch] Starting ${actorId} for ${entries.length} row(s).`);
-  const run = await client.actor(actorId).call(actorInput, { waitSecs, ...cotActorPhaseOptions(phase) });
+  // SDK call() otherwise waits for streamedLog.stop() even after the run finishes.
+  // A stalled log stream must never block retrieving the completed dataset.
+  const run = await client.actor(actorId).call(actorInput, { waitSecs, build: APIFY_ACTOR_BUILD, log: null, ...cotActorPhaseOptions(phase) });
+  console.log(`[facebook-actor-batch] ${phase} run ${run?.id}: ${run?.status}.`);
   const runStatus = typeof run?.status === 'string' ? run.status.toUpperCase() : '';
   if (['READY', 'RUNNING'].includes(runStatus)) {
     throw new PublicError(504, 'APIFY_TIMEOUT', 'Facebook batch timed out. Please retry the saved batch.');
@@ -700,6 +732,21 @@ function readCotBatchCache(map, batchId, fingerprint) {
   return entry.value;
 }
 
+// Overall deadline for one batch. Neither the scraper calls (bounded by
+// `waitSecs`) nor `analyzeLead` (bounded by its AbortController) can be trusted
+// to always return: a half-open socket or a stuck SDK poll has hung batches
+// until the pipeline's ~10-minute abort. Fail with a retryable 503 well before
+// that. Retries share the same reserved execution until it settles; a completed
+// result can then be replayed from cache. Default sits just
+// under the pipeline's validationTimeoutSeconds; raise it toward the max if
+// healthy batches trip it, lower it for faster failover.
+function cotBatchDeadlineMs() {
+  return parsePositiveNumber(process.env.COT_BATCH_DEADLINE_MS, 420_000, {
+    min: 60_000,
+    max: 570_000
+  });
+}
+
 async function runCotValidationBatch(batchId, fingerprint, rows) {
   let fetchResultsByPosition = readCotBatchCache(cotBatchEvidence, batchId, fingerprint);
   if (!fetchResultsByPosition) {
@@ -743,6 +790,7 @@ async function runCotValidationBatch(batchId, fingerprint, rows) {
 
 export function createCotBatchHandler({
   maxBatchSize,
+  deadlineMs = cotBatchDeadlineMs(),
   runBatchFn = runCotValidationBatch,
   completedBatchesMap = completedCotBatches,
   activeBatchesMap = activeCotBatches
@@ -762,18 +810,21 @@ export function createCotBatchHandler({
         }
         return res.json(await active.promise);
       }
-      const promise = (async () => {
+      const reservation = { fingerprint, promise: null };
+      const execution = Promise.resolve().then(async () => {
         const response = await runBatchFn(parsed.batchId, fingerprint, parsed.rows);
         cacheCotBatch(completedBatchesMap, parsed.batchId, fingerprint, response);
         return response;
-      })();
-      const reservation = { fingerprint, promise };
-      activeBatchesMap.set(parsed.batchId, reservation);
-      try {
-        return res.json(await promise);
-      } finally {
+      }).finally(() => {
+        // Own the batch until provider work settles, even if the HTTP deadline
+        // has already expired. Retries must not launch duplicate paid work.
         if (activeBatchesMap.get(parsed.batchId) === reservation) activeBatchesMap.delete(parsed.batchId);
-      }
+      });
+      reservation.promise = withDeadline(execution, deadlineMs, () => new PublicError(
+        503, 'apify_unavailable', 'Validation batch exceeded its processing deadline.'
+      ));
+      activeBatchesMap.set(parsed.batchId, reservation);
+      return res.json(await reservation.promise);
     } catch (error) {
       if (error instanceof PublicError) {
         if (error.status === 503) res.set('Retry-After', '60');
