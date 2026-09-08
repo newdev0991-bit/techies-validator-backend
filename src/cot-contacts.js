@@ -1,4 +1,5 @@
 import { normalizeLead } from './card-data.js';
+import { googleContactSourceKind } from './contact-sources.js';
 import { isSuccessfulFacebookScrape, validateFacebookUrl } from './validation.js';
 import { normalizeUkContactPhone } from '../actor/src/contactValues.js';
 import { searchContactsFromLead } from './search-author-contacts.js';
@@ -53,7 +54,8 @@ export function enrichCotContacts(lead = {}, businessIdentity) {
   const phoneAllowed = usable && contact.identityStatus === 'matched'
     && contact.phoneVerified === true && phoneUrl && !isPublisherContact(phoneUrl)
     && (/^facebook-/.test(phoneSource) ? validateFacebookUrl(phoneUrl).ok
-      : /^google-official-website/.test(phoneSource) && contact.source === 'google-official-website');
+      // Any accepted Google source, and the phone must have been read from that same source.
+      : Boolean(googleContactSourceKind(contact.source)) && phoneSource.startsWith(contact.source));
   const phone = field(phoneAllowed ? normalizeUkContactPhone(contact.phone) : '',
     submitted.phone, phoneSource, phoneUrl, normalizeUkContactPhone);
   const addressUrl = sourceUrl(address.sourceUrl);

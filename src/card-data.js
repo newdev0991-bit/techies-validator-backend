@@ -1,3 +1,7 @@
+import { googleContactSourceKind } from './contact-sources.js';
+
+export { GOOGLE_CONTACT_SOURCE_KINDS, googleContactSourceKind } from './contact-sources.js';
+
 export const CARD_DATA_PROFILE = 'card-data-business-activity';
 export const DEFAULT_ACTIVITY_WINDOW_DAYS = 183;
 
@@ -298,8 +302,12 @@ export function normalizeActorEvidence(
   const contactIdentityConfidence = String(
     contact.identityConfidence || actorData.contactIdentityConfidence || ''
   ).toLowerCase();
+  const contactSourceKind = googleContactSourceKind(contactSource);
+  const contactLocationMatch = String(
+    contact.locationMatch || actorData.contactLocationMatch || ''
+  ).toLowerCase();
   const googleContactIdentityMatched = Boolean(
-    contactSource === 'google-official-website' &&
+    contactSourceKind &&
       contactIdentityStatus === 'matched' &&
       /^https?:\/\//i.test(contactSourceUrl)
   );
@@ -313,7 +321,7 @@ export function normalizeActorEvidence(
     contact.emailVerified === true ||
       actorData.emailVerified === true ||
       ['mailto-link', 'labeled-page-contact'].includes(actorEmailSource) ||
-      actorEmailSource.startsWith('google-official-website')
+      Boolean(googleContactSourceKind(actorEmailSource))
   );
   const acceptedActorEmail =
     contactIdentityMatched && actorEmailVerified ? actorEmail : '';
@@ -383,11 +391,17 @@ export function normalizeActorEvidence(
           ? 'matched'
           : contactIdentityStatus || 'unconfirmed',
       identityConfidence: googleContactIdentityMatched
-        ? contactIdentityConfidence || 'high'
+        // A third-party listing does not carry a first-party site's authority, so it never
+        // defaults to high; the Actor's own reading of the page still wins when it supplied one.
+        ? contactIdentityConfidence || (contactSourceKind === 'official' ? 'high' : 'medium')
         : identityMatched
           ? 'medium'
           : contactIdentityConfidence || 'low',
-      searchQuery: contact.searchQuery || actorData.googleSearchQuery || null
+      searchQuery: contact.searchQuery || actorData.googleSearchQuery || null,
+      // Whether the source page was placed by postcode or only by town. A caller needs this to
+      // judge a listing number that may reach a head office rather than the new premises.
+      locationMatch: (googleContactIdentityMatched && contactLocationMatch) || null,
+      sourceKind: contactSourceKind || null
     },
     activity: {
       latestPostDate: latestPost?.date || null,
@@ -560,10 +574,15 @@ export function buildCardDataAnalysis(
     successFactors.push('No chain, franchise, or large-business signals were detected');
   }
   if (contactTypes.length) {
+    // A listing is named as one rather than described as an official site, so a reader is not
+    // told a directory entry was the business's own page.
+    const contactKind = googleContactSourceKind(evidence.contact.source);
     successFactors.push(
-      evidence.contact.source === 'google-official-website'
+      contactKind === 'official'
         ? `Google verified public ${contactTypes.join(', ')} contact details on the matched official website`
-        : `Public ${contactTypes.join(', ')} contact details were found`
+        : contactKind === 'listing'
+          ? `Google matched public ${contactTypes.join(', ')} contact details on a business listing for this business`
+          : `Public ${contactTypes.join(', ')} contact details were found`
     );
   }
   if (evidence.business.identityStatus === 'matched') {
