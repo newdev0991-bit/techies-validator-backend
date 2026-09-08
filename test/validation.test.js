@@ -85,3 +85,13 @@ test('validates duplicate key arrays and applies a size bound', () => {
   assert.equal(validateKnownDuplicateKeys([1]).error.code, 'INVALID_DUPLICATE_KEYS');
   assert.deepEqual(validateKnownDuplicateKeys(['a']), { ok: true, value: ['a'] });
 });
+
+test('the revised spec verdicts survive normalisation, and junk still falls back', () => {
+  // MAYBE and NOT_A_LEAD are new. Before this, both collapsed to UNCLEAR, which is why
+  // "ordinary post, no premises event" was indistinguishable from "evidence conflicts".
+  for (const verdict of ['GOOD', 'BAD', 'UNCLEAR', 'MAYBE', 'NOT_A_LEAD']) {
+    assert.equal(normalizeAiResponse({ verdict, reasoning: 'r' }).verdict, verdict);
+  }
+  assert.equal(normalizeAiResponse({ verdict: 'not_a_lead', reasoning: 'r' }).verdict, 'NOT_A_LEAD');
+  assert.equal(normalizeAiResponse({ verdict: 'PROBABLY', reasoning: 'r' }).verdict, 'UNCLEAR');
+});
