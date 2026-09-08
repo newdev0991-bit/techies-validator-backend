@@ -49,6 +49,10 @@ app.set('trust proxy', 1);
 // invalid-input, which halted the standalone pipeline. 0.0.54 is the last known
 // good build; override with APIFY_ACTOR_BUILD once `latest` is trustworthy again.
 const APIFY_ACTOR_BUILD = process.env.APIFY_ACTOR_BUILD || '0.0.54';
+// The Apify API holds a run-status request open for at most this long per
+// poll (RunGetOptions.waitForFinish). Any client-side request timeout at or
+// below it aborts a poll that is behaving normally. See apifyRequestTimeoutSecs().
+const APIFY_MAX_WAIT_FOR_FINISH_SECS = 60;
 
 /* ---------- CORS allowlist (Vercel + localhost) ---------- */
 const configuredOrigins = [process.env.FRONTEND_ORIGIN, process.env.ALLOWED_ORIGINS]
@@ -596,7 +600,7 @@ async function runFacebookActor(lead, options = {}) {
   }
   normalizedLead.link = linkValidation.value;
 
-  const client = new ApifyClient({ token: APIFY_API_TOKEN, maxRetries: 0, timeoutSecs: 30 });
+  const client = new ApifyClient({ token: APIFY_API_TOKEN, maxRetries: 0, timeoutSecs: apifyRequestTimeoutSecs() });
   const actorId = process.env.APIFY_ACTOR_ID || 'J8wBqFJa8GQo9RJ5J';
   const actorClient = client.actor(actorId);
   const activityWindowDays = parsePositiveNumber(
@@ -708,7 +712,7 @@ async function runFacebookActorBatch(rows, phase = 'proof') {
   });
 
   // Never automatically replay an Actor-start POST whose paid outcome is uncertain.
-  const client = new ApifyClient({ token, maxRetries: 0, timeoutSecs: 30 });
+  const client = new ApifyClient({ token, maxRetries: 0, timeoutSecs: apifyRequestTimeoutSecs() });
   const actorId = process.env.APIFY_ACTOR_ID || 'J8wBqFJa8GQo9RJ5J';
   const activityWindowDays = parsePositiveNumber(process.env.COT_ACTIVITY_WINDOW_DAYS, 1, {
     min: 1,
@@ -823,6 +827,25 @@ function cotBatchDeadlineMs() {
   return parsePositiveNumber(process.env.COT_BATCH_DEADLINE_MS, 420_000, {
     min: 60_000,
     max: 570_000
+  });
+}
+
+// The SDK's call() does not sleep-and-poll: it asks the API to hold each status
+// request open for up to 60s (RunGetOptions.waitForFinish, capped at 60 by the
+// API). A per-request timeout below that window aborts a poll mid-wait, and with
+// maxRetries: 0 the client throws immediately. That throw is a transport error,
+// not an ApifyApiError, so apifyFailure() cannot classify it and the batch
+// handler answers an opaque 500 -- which the lead pipeline reads as
+// VALIDATION_RESULT_UNCERTAIN and halts on until an operator reconciles.
+//
+// The old value of 30 made that the outcome for every Actor run slower than 30
+// seconds, and skipped the designed slow-run path entirely: call() is supposed
+// to return a READY/RUNNING run after waitSecs, which becomes a 504 APIFY_TIMEOUT
+// that names what happened. waitSecs must bound the wait; the transport must not.
+export function apifyRequestTimeoutSecs() {
+  return parsePositiveNumber(process.env.APIFY_REQUEST_TIMEOUT_SECS, 120, {
+    min: APIFY_MAX_WAIT_FOR_FINISH_SECS + 1,
+    max: 360
   });
 }
 
