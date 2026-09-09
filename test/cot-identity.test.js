@@ -28,13 +28,31 @@ test('missing, invented, wrong-business or unrelated evidence fails closed for s
     const identity = evaluateCotIdentity(lead, invalid);
     assert.equal(identity.status, 'unresolved');
     const analysis = applyCotIdentityPolicy({ verdict: 'GOOD' }, identity);
-    assert.equal(analysis.verdict, 'UNCLEAR');
+    // Failing closed here means routing to review and withholding the publisher's
+    // contacts -- not downgrading the verdict. An unresolved own-business identity
+    // (typically a personal profile) keeps its verdict; only third_party downgrades.
+    assert.equal(analysis.verdict, 'GOOD');
     assert.equal(analysis.needs_manual_review, true);
     assert.equal(enrichCotContacts(lead, identity).phone.value, '');
   }
   const unmatched = structuredClone(lead);
   unmatched.fetchResults.rawData.time_target_matched = false;
   assert.equal(evaluateCotIdentity(unmatched, claim).status, 'unresolved');
+});
+
+test('an unresolved personal-profile lead keeps its verdict; only third_party is downgraded', () => {
+  const unresolved = evaluateCotIdentity(lead, { ...claim, relationship: 'unknown' });
+  assert.equal(unresolved.relationship, 'unknown');
+  const keptGood = applyCotIdentityPolicy({ verdict: 'GOOD' }, unresolved);
+  assert.equal(keptGood.verdict, 'GOOD');
+  assert.equal(keptGood.needs_manual_review, true);
+  assert.match(keptGood.reasoning, /Business identity:/);
+
+  const promoter = structuredClone(lead);
+  promoter.fetchResults.rawData.postText = 'Good luck to Ed and Mollie with the new shop!';
+  const thirdParty = evaluateCotIdentity(promoter, { ...claim, evidenceQuote: promoter.fetchResults.rawData.postText });
+  assert.equal(thirdParty.relationship, 'third_party');
+  assert.equal(applyCotIdentityPolicy({ verdict: 'GOOD' }, thirdParty).verdict, 'UNCLEAR');
 });
 
 test('referrals and another tagged business override model self claims and publisher contacts', () => {

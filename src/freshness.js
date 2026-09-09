@@ -917,13 +917,16 @@ export function applyFreshnessPolicy(aiResponse, freshness) {
     : 'No AI reasoning was supplied.';
   const redFlags = normalizeStringArray(response.red_flags);
 
+  // Revised spec: "Freshness is a priority signal, not an automatic eligibility gate."
+  // Age used to overwrite the model's verdict with BAD here, which meant a genuine
+  // new-premises event more than the threshold old was rejected before any human or
+  // downstream rule could see it. The age is now surfaced as a red flag for
+  // prioritisation and the verdict is left to the evidence.
   if (freshness.autoRejectEligible) {
-    const flag = `Lead is ${staleAgeText(freshness)} - exceeds freshness threshold`;
     return {
       ...response,
-      verdict: 'BAD',
-      reasoning: `[AUTO REJECTED: Post is ${staleAgeText(freshness)} - exceeds ${freshness.thresholdHours}-hour freshness requirement] ${reasoning}`,
-      red_flags: [...redFlags, flag],
+      reasoning: `[LOW PRIORITY: post is ${staleAgeText(freshness)}, beyond the ${freshness.thresholdHours}-hour priority window] ${reasoning}`,
+      red_flags: [...redFlags, `Lead is ${staleAgeText(freshness)} - outside the freshness priority window`],
       needs_manual_review: false
     };
   }

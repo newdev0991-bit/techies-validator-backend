@@ -52,8 +52,17 @@ export function evaluateCotIdentity(lead = {}, claim = {}) {
 
 export function applyCotIdentityPolicy(analysis, identity) {
   if (!identity.requiresManualReview) return { ...analysis, business_identity: identity };
+  // A proof that promotes a *different* business (third_party) cannot have its
+  // publisher's contacts attributed to that business, so a GOOD verdict there is
+  // downgraded to UNCLEAR. An unresolved own-business identity is different: it is
+  // typically a personal profile the pipeline could not tie to a business Page, and
+  // per the personal-profile rules that is not, on its own, a reason to doubt the
+  // opportunity. Keep the verdict and route it to review with the gap named — the
+  // pipeline's `requiresManualReview` still stops it reaching READY unattended, and
+  // enrichCotContacts still withholds the publisher's phone from an unresolved lead.
+  const unattributable = identity.relationship === 'third_party';
   return { ...analysis, business_identity: identity,
-    verdict: analysis.verdict === 'GOOD' ? 'UNCLEAR' : analysis.verdict,
+    verdict: unattributable && analysis.verdict === 'GOOD' ? 'UNCLEAR' : analysis.verdict,
     needs_manual_review: true,
     reasoning: `${analysis.reasoning || ''} [Business identity: ${identity.reason}]`.trim() };
 }

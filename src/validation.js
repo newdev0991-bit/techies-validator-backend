@@ -85,7 +85,10 @@ export function normalizeAiResponse(value) {
   }
 
   const rawVerdict = typeof value.verdict === 'string' ? value.verdict.toUpperCase() : '';
-  const verdict = ['GOOD', 'BAD', 'UNCLEAR'].includes(rawVerdict) ? rawVerdict : 'UNCLEAR';
+  // MAYBE and NOT_A_LEAD come from the revised spec's decision logic: MAYBE is
+  // incomplete or conflicting evidence, NOT_A_LEAD is ordinary content with no
+  // premises event -- previously both collapsed into BAD or UNCLEAR.
+  const verdict = ['GOOD', 'BAD', 'UNCLEAR', 'MAYBE', 'NOT_A_LEAD'].includes(rawVerdict) ? rawVerdict : 'UNCLEAR';
   const caption = isPlainObject(value.caption_analysis) ? value.caption_analysis : {};
   const history = isPlainObject(value.post_history_analysis) ? value.post_history_analysis : {};
   const rawMaturity = typeof history.page_maturity === 'string'
