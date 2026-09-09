@@ -458,13 +458,40 @@ test('missing and invalid dates produce structured manual-review reasons', () =>
   assert.ok(invalid.warnings.some(item => item.code === 'INVALID_DATE_CANDIDATE'));
 });
 
-test('auto-reject policy uses correct singular and plural age grammar', () => {
+test('an over-threshold post is deprioritised, never rejected on age alone', () => {
+  const stale = evaluateLeadFreshness(
+    leadWithTimestamp('2026-08-05T03:00:00.000Z'),
+    { now: new Date('2026-08-06T04:00:00.000Z') }
+  );
+  assert.equal(stale.autoRejectEligible, true);
+  const applied = applyFreshnessPolicy(aiResponse(), stale);
+  // The whole point of the revised spec: a qualifying premises event stays GOOD even
+  // when the post is past the priority window. This used to come back BAD.
+  assert.equal(applied.verdict, 'GOOD');
+  assert.equal(applied.needs_manual_review, false);
+  assert.ok(applied.red_flags.some(flag => /outside the freshness priority window/.test(flag)),
+    'the age must still be visible as a prioritisation signal');
+});
+
+test('unresolved freshness evidence still routes to manual review', () => {
+  const unresolved = evaluateLeadFreshness(
+    { 'Lead Proof URL': DIRECT_POST_URL, fetchResults: { rawData: {} } },
+    { now: new Date('2026-08-06T04:00:00.000Z') }
+  );
+  assert.equal(unresolved.requiresManualReview, true);
+  const applied = applyFreshnessPolicy(aiResponse(), unresolved);
+  // Missing evidence is a statement about the evidence, not the age, so this gate stays.
+  assert.equal(applied.verdict, 'UNCLEAR');
+  assert.equal(applied.needs_manual_review, true);
+});
+
+test('priority age grammar uses correct singular and plural', () => {
   const oneDay = evaluateLeadFreshness(
     leadWithTimestamp('2026-08-05T03:00:00.000Z'),
     { now: new Date('2026-08-06T04:00:00.000Z') }
   );
   const oneDayResponse = applyFreshnessPolicy(aiResponse(), oneDay);
-  assert.match(oneDayResponse.reasoning, /Post is 1 day old/);
+  assert.match(oneDayResponse.reasoning, /post is 1 day old/);
   assert.doesNotMatch(oneDayResponse.reasoning, /1 days/);
 
   const twoDays = evaluateLeadFreshness(
@@ -472,7 +499,7 @@ test('auto-reject policy uses correct singular and plural age grammar', () => {
     { now: new Date('2026-08-06T04:00:00.000Z') }
   );
   const twoDayResponse = applyFreshnessPolicy(aiResponse(), twoDays);
-  assert.match(twoDayResponse.reasoning, /Post is 2 days old/);
+  assert.match(twoDayResponse.reasoning, /post is 2 days old/);
 });
 
 test('23h relative evidence is safely fresh but never auto-reject eligible', () => {
