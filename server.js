@@ -238,13 +238,12 @@ POSTING HISTORY ANALYSIS:
 
 Bad leads are:
 - Education sector (schools, academies, nurseries, tutoring centers, training centers)
-- Businesses that have been open for months/years already
-- Non-commercial entities (churches, charities, personal blogs, non-commercial personal pages)
+- Non-commercial entities (churches, charities, personal blogs)
 - Locations outside UK mainland or in banned areas (Ireland, Northern Ireland, Guernsey, Jersey, Isle of Man)
 - Businesses clearly not needing B2B services
 - Missing contact information alone is not a reason to classify a business opportunity as BAD
 
-MINOR UPDATES TO REJECT (Not new businesses):
+MINOR UPDATES -> NOT_A_LEAD (these are not premises events, and not exclusions):
 - New products/services: "new menu", "new items", "new pricelist", "new services", "new offers"
 - Cosmetic changes: "new decor", "new look", "renovated", "refurbished", "new paint"
 - Partial expansions: "upstairs only", "new section", "new floor", "expansion area"
@@ -273,6 +272,41 @@ CRITICAL FACTORS TO CONSIDER:
 6. Location: Is this in a serviceable UK area?
 7. Opportunity Quality: How likely is this to convert to a sale?
 
+ALREADY-TRADING BUSINESSES ARE NOT AUTOMATICALLY BAD:
+- A business that is already open and trading can still be a GOOD lead when the post
+  documents a distinct new premises, new branch, relocation, reopening, expansion or
+  ownership change. Judge the EVENT, not whether the business existed beforehand.
+- Prior opening or "got the keys" posts in the supplied history do not reject the lead.
+  They reject it only when this post repeats the same announcement with no new premises.
+- Post age never decides the verdict. A qualifying premises event is GOOD even when the
+  post is older than 48 hours. The backend computes age separately and uses it to
+  prioritise, not to reject.
+
+A PERSONAL PROFILE IS NOT AUTOMATICALLY BAD OR UNCLEAR:
+- Leads are often posted from a person's own Facebook profile rather than a business
+  Page. Account type alone is neither an exclusion nor a reason for UNCLEAR.
+- When the person is clearly operating the business - describes it as "our"/"my" shop,
+  names themselves as its owner or manager, the post image carries the business's
+  branding, or the post links to its booking page - assess the premises event exactly
+  as you would for a business Page. Set business_identity.relationship to "self" and
+  name the business.
+- Downgrade only when the post promotes someone else's business (third_party), or the
+  person's connection to the business cannot be told from the supplied evidence at all.
+
+VERDICTS:
+- GOOD: a qualifying premises event (new venue, new branch, relocation, reopening,
+  expansion, ownership change) at a commercial premises, supported by the evidence.
+- BAD: a hard exclusion fired - prohibited business type, banned postcode, confirmed
+  residential-only address, large/national chain, closure with no continuing premises,
+  online-only, or a temporary stall/pop-up with no permanent venue.
+- MAYBE: a premises event is plausible but the evidence is incomplete or conflicting -
+  ambiguous address, unclear page ownership, uncertain timing.
+- NOT_A_LEAD: ordinary content with no premises event at all - promotions, menus,
+  product or price updates, opening-hours posts, service updates.
+
+Use NOT_A_LEAD, not BAD, for ordinary content. BAD means the business is excluded;
+NOT_A_LEAD means this particular post simply is not an opening or move.
+
 (Note: Freshness checking is handled automatically by the system - focus on business quality analysis)
 
 EXAMPLE SCENARIOS:
@@ -287,26 +321,44 @@ GOOD LEADS:
 - "Under new management! The cafe has been taken over and we're excited to serve you"
   + Caption: New ownership keywords + GOOD
 
-BAD LEADS:
+NOT_A_LEAD (ordinary content, no premises event):
 - "Check out our new menu! Fresh items added this week"
-  + Caption: Product update only + BAD
+  + Caption: Product update only + NOT_A_LEAD
 
 - "New pricelist for 2024! Updated rates below"
-  + Caption: Pricelist update + BAD
+  + Caption: Pricelist update + NOT_A_LEAD
 
 - "Our new store stand looks amazing! Come see the display"
-  + Caption: Equipment update (stand only, not business) + BAD
+  + Caption: Equipment update (stand only, not business) + NOT_A_LEAD
 
 - "Upstairs section now open! More seating available"
-  + Caption: Partial expansion (not full opening) + BAD
+  + Caption: Partial expansion (not full opening) + NOT_A_LEAD
 
 - "Check out our friends' latest offers!"
-  + Caption: Generic referral with no qualifying business event + BAD
+  + Caption: Generic referral with no qualifying business event + NOT_A_LEAD
+
+BAD (the business itself is excluded):
+- "Our new law firm office opens Monday at 14 High Street"
+  + Prohibited business type (solicitors) + BAD
+
+- "New Greggs now open in the retail park"
+  + Named large brand + BAD
+
+- "Opening my new salon chair inside Bella's Hair Studio"
+  + A chair rented inside another business is not a change of tenancy + BAD
+
+MAYBE (premises event plausible, evidence incomplete):
+- "So excited, we finally got the keys!!"
+  + Opening language but no business name, address or venue evidence + MAYBE
+
+GOOD despite already trading (revised rule):
+- "After 12 years on the high street we've moved to our new premises on Oak Road"
+  + Established business, but a genuine relocation to new premises + GOOD
 
 Analyze this lead carefully and provide your assessment in json format:
 
 {
-  "verdict": "GOOD" | "BAD" | "UNCLEAR",
+  "verdict": "GOOD" | "BAD" | "MAYBE" | "NOT_A_LEAD" | "UNCLEAR",
   "reasoning": "Detailed explanation using only supplied caption, post history, and business evidence",
   "confidence": 85,
   "key_factors": ["Primary reasons for this verdict"],

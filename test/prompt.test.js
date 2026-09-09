@@ -31,6 +31,14 @@ test('prompt never seeds the unsupported 142 count when history is absent', () =
   assert.equal(constrained.post_history_analysis.posting_pattern, 'Insufficient information');
 });
 
+test('prompt treats a personal profile as assessable, not an automatic exclusion', () => {
+  const prompt = buildPrompt({ 'Company Name': 'Rad & Razor' });
+  assert.match(prompt, /A PERSONAL PROFILE IS NOT AUTOMATICALLY BAD OR UNCLEAR/);
+  assert.match(prompt, /assess the premises event exactly\s+as you would for a business Page/);
+  // The old BAD list lumped "non-commercial personal pages" in with churches/charities.
+  assert.doesNotMatch(prompt, /non-commercial personal pages/);
+});
+
 test('prompt reads actor activity.recentPosts and caps displayed evidence', () => {
   const recentPosts = Array.from({ length: 12 }, (_, index) => ({
     date: `2026-08-${String(index + 1).padStart(2, '0')}`,
