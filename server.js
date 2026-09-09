@@ -234,7 +234,7 @@ POSTING HISTORY ANALYSIS:
 
 Bad leads are:
 - Education sector (schools, academies, nurseries, tutoring centers, training centers)
-- Non-commercial entities (churches, charities, personal blogs, non-commercial personal pages)
+- Non-commercial entities (churches, charities, personal blogs)
 - Locations outside UK mainland or in banned areas (Ireland, Northern Ireland, Guernsey, Jersey, Isle of Man)
 - Businesses clearly not needing B2B services
 - Missing contact information alone is not a reason to classify a business opportunity as BAD
@@ -277,6 +277,17 @@ ALREADY-TRADING BUSINESSES ARE NOT AUTOMATICALLY BAD:
 - Post age never decides the verdict. A qualifying premises event is GOOD even when the
   post is older than 48 hours. The backend computes age separately and uses it to
   prioritise, not to reject.
+
+A PERSONAL PROFILE IS NOT AUTOMATICALLY BAD OR UNCLEAR:
+- Leads are often posted from a person's own Facebook profile rather than a business
+  Page. Account type alone is neither an exclusion nor a reason for UNCLEAR.
+- When the person is clearly operating the business - describes it as "our"/"my" shop,
+  names themselves as its owner or manager, the post image carries the business's
+  branding, or the post links to its booking page - assess the premises event exactly
+  as you would for a business Page. Set business_identity.relationship to "self" and
+  name the business.
+- Downgrade only when the post promotes someone else's business (third_party), or the
+  person's connection to the business cannot be told from the supplied evidence at all.
 
 VERDICTS:
 - GOOD: a qualifying premises event (new venue, new branch, relocation, reopening,
