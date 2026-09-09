@@ -1,7 +1,7 @@
 import { normalizeLead } from './card-data.js';
 import { googleContactSourceKind } from './contact-sources.js';
 import { isSuccessfulFacebookScrape, validateFacebookUrl } from './validation.js';
-import { normalizeUkContactPhone } from '../actor/src/contactValues.js';
+import { normalizeUkContactPhone, extractUkCaptionPhones } from '../actor/src/contactValues.js';
 import { searchContactsFromLead } from './search-author-contacts.js';
 import { proofAddresses, addressesAgree } from '../actor/src/proofAddress.js';
 export { normalizeUkContactPhone } from '../actor/src/contactValues.js';
@@ -58,6 +58,24 @@ export function enrichCotContacts(lead = {}, businessIdentity) {
       : Boolean(googleContactSourceKind(contact.source)) && phoneSource.startsWith(contact.source));
   const phone = field(phoneAllowed ? normalizeUkContactPhone(contact.phone) : '',
     submitted.phone, phoneSource, phoneUrl, normalizeUkContactPhone);
+
+  // A number observed in the exact caption remains a candidate when identity is
+  // unresolved. Promote only a single number on a matched self-business proof.
+  const captionObserved = sameRow && isSuccessfulFacebookScrape(raw)
+    && raw.time_target_matched === true && !raw.scrape?.blocked
+    && !raw.scrape?.loginRequired && !raw.scrape?.notFound && !raw.business?.wrongBusiness;
+  const captionPhones = captionObserved ? extractUkCaptionPhones(raw.postText) : [];
+  const ownProof = usable && businessIdentity?.status === 'matched'
+    && businessIdentity.relationship === 'self';
+  phone.candidates = captionPhones.map(value => ({ value, source: 'facebook-post-contact',
+    sourceUrl: input.value, verified: ownProof }));
+  if (ownProof && captionPhones.length) {
+    phone.conflict ||= captionPhones.length > 1 || Boolean(phone.value && !captionPhones.includes(phone.value));
+    if (!phone.value && captionPhones.length === 1 && !phone.conflict) {
+      Object.assign(phone, field(captionPhones[0], submitted.phone, 'facebook-post-contact', input.value, normalizeUkContactPhone));
+    }
+  }
+
   const addressUrl = sourceUrl(address.sourceUrl);
   const addressAllowed = usable && (raw.business?.identityStatus === 'matched' || businessIdentity?.status === 'matched')
     && address.verified === true && !isPublisherContact(addressUrl) &&
@@ -97,6 +115,7 @@ export function enrichCotContacts(lead = {}, businessIdentity) {
     status: conflicts ? 'review_required' : complete ? 'complete' : fields.some(item => item.value) ? 'partial' : 'unavailable',
     phone, address: fullAddress, postcode: postcodeField,
     requiresManualReview: conflicts || !complete,
+    reviewReasons: [...(!phone.value ? ['PHONE_MISSING'] : []), ...(businessIdentity?.requiresManualReview ? ['IDENTITY_UNRESOLVED'] : []), ...(conflicts ? ['CONTACT_CONFLICT'] : [])],
     warnings: [
       ...(businessIdentity?.requiresManualReview ? [businessIdentity.reason] : []),
       ...(!sameRow ? ['Contact evidence is missing or belongs to a different proof URL.'] : []),
