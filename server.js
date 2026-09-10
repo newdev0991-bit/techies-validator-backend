@@ -24,6 +24,7 @@ import { enrichCotContacts, cotLeadWithContacts } from './src/cot-contacts.js';
 import { runGoodLeadContactPhase } from './src/cot-contact-workflow.js';
 import { runWebContactRecovery } from './src/web-contact-recovery.js';
 import { createWebContactSearch } from './src/openai-web-search.js';
+import { createWebVerdict, applyWebChecks } from './src/web-verdict.js';
 import { searchContactsFromLead } from './src/search-author-contacts.js';
 import { cotActorPhaseOptions } from './src/pipeline-capabilities.js';
 import { evaluateCotIdentity, applyCotIdentityPolicy } from './src/cot-identity.js';
@@ -441,6 +442,30 @@ async function analyzeLead(lead) {
     min: 1_000,
     max: 120_000
   });
+
+  // Browsing verdict, off unless WEB_VERDICT=on. It exists for the two spec rules a
+  // Facebook scrape cannot settle -- is the address a commercial premises, and is this
+  // a chain of ten or more sites -- both of which are auto-rejects that have never been
+  // enforceable here. It returns the same JSON contract as the plain call. If it is off,
+  // fails, times out or returns something unparseable it yields null and we fall through
+  // to the ordinary completion below: a browsing problem must never fail a lead.
+  const webVerdict = createWebVerdict();
+  if (webVerdict) {
+    const browsed = await webVerdict(buildPrompt(analysisLead), systemMsg);
+    if (browsed) {
+      try {
+        const checked = applyWebChecks(
+          normalizeAiResponse(browsed.analysis), browsed.webChecks, browsed.citations);
+        const analysis = finalizeCotAnalysis(lead, constrainAnalysisToEvidence(checked, lead));
+        // Kept so a verdict reached with web evidence can be explained later. The
+        // citations come from the search tool, not from model prose.
+        analysis.web_evidence = { checks: browsed.webChecks, citations: browsed.citations };
+        return analysis;
+      } catch (error) {
+        console.error(`[analyze] Web verdict unusable, falling back: ${error.name}.`);
+      }
+    }
+  }
   const controller = new AbortController();
   const abortTimer = setTimeout(() => controller.abort(), timeoutMs);
   // Belt and braces: aborting the fetch signal does not always unblock a body
