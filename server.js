@@ -22,6 +22,8 @@ import {
 import { applyFreshnessPolicy, evaluateLeadFreshness } from './src/freshness.js';
 import { enrichCotContacts, cotLeadWithContacts } from './src/cot-contacts.js';
 import { runGoodLeadContactPhase } from './src/cot-contact-workflow.js';
+import { runWebContactRecovery } from './src/web-contact-recovery.js';
+import { createWebContactSearch } from './src/openai-web-search.js';
 import { searchContactsFromLead } from './src/search-author-contacts.js';
 import { cotActorPhaseOptions } from './src/pipeline-capabilities.js';
 import { evaluateCotIdentity, applyCotIdentityPolicy } from './src/cot-identity.js';
@@ -837,6 +839,16 @@ async function runCotValidationBatch(batchId, fingerprint, rows) {
   await runGoodLeadContactPhase(results, {
     scrape: candidates => runFacebookActorBatch(candidates, 'contacts'), finalize: finalizeCotAnalysis,
   });
+  // Last resort, and off unless WEB_CONTACT_RECOVERY=on. Only the leads the Actor left
+  // without a number reach it, and everything it finds is a candidate for a reviewer --
+  // it never writes a contact value, so it cannot carry a lead to READY on its own.
+  const webSearch = createWebContactSearch();
+  if (webSearch) {
+    await runWebContactRecovery(results, {
+      search: webSearch,
+      maxLookups: parsePositiveNumber(process.env.WEB_SEARCH_MAX_PER_BATCH, 10, { min: 1, max: 50 })
+    });
+  }
   return { success: true, batchId, results };
 }
 
