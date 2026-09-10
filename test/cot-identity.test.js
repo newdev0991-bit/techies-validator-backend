@@ -28,13 +28,31 @@ test('missing, invented, wrong-business or unrelated evidence fails closed for s
     const identity = evaluateCotIdentity(lead, invalid);
     assert.equal(identity.status, 'unresolved');
     const analysis = applyCotIdentityPolicy({ verdict: 'GOOD' }, identity);
-    assert.equal(analysis.verdict, 'UNCLEAR');
+    // Failing closed here means routing to review and withholding the publisher's
+    // contacts -- not downgrading the verdict. An unresolved own-business identity
+    // (typically a personal profile) keeps its verdict; only third_party downgrades.
+    assert.equal(analysis.verdict, 'GOOD');
     assert.equal(analysis.needs_manual_review, true);
     assert.equal(enrichCotContacts(lead, identity).phone.value, '');
   }
   const unmatched = structuredClone(lead);
   unmatched.fetchResults.rawData.time_target_matched = false;
   assert.equal(evaluateCotIdentity(unmatched, claim).status, 'unresolved');
+});
+
+test('an unresolved personal-profile lead keeps its verdict; only third_party is downgraded', () => {
+  const unresolved = evaluateCotIdentity(lead, { ...claim, relationship: 'unknown' });
+  assert.equal(unresolved.relationship, 'unknown');
+  const keptGood = applyCotIdentityPolicy({ verdict: 'GOOD' }, unresolved);
+  assert.equal(keptGood.verdict, 'GOOD');
+  assert.equal(keptGood.needs_manual_review, true);
+  assert.match(keptGood.reasoning, /Business identity:/);
+
+  const promoter = structuredClone(lead);
+  promoter.fetchResults.rawData.postText = 'Good luck to Ed and Mollie with the new shop!';
+  const thirdParty = evaluateCotIdentity(promoter, { ...claim, evidenceQuote: promoter.fetchResults.rawData.postText });
+  assert.equal(thirdParty.relationship, 'third_party');
+  assert.equal(applyCotIdentityPolicy({ verdict: 'GOOD' }, thirdParty).verdict, 'UNCLEAR');
 });
 
 test('referrals and another tagged business override model self claims and publisher contacts', () => {
@@ -96,5 +114,27 @@ test('short-quote expansion cannot manufacture identity from unrelated or unsafe
     const row = structuredClone(base); row.fetchResults.rawData.postText += `\n\n${suffix}`;
     assert.equal(evaluateCotIdentity(row, short).status, 'third_party');
     assert.equal(contactTargetFromProof(row.fetchResults.rawData, short), null);
+  }
+});
+
+test('an ownership or management change is a self-event even without a pronoun', () => {
+  // "under new ownership" and "under new management" describe the publisher's own business
+  // and are how such posts are actually written, but the self-event pattern required a
+  // we/our/us near the event word, so these fell to unresolved and lost their contacts.
+  for (const text of ['Belmont House is under new ownership.', 'Croft House, under new management from Monday.']) {
+    const post = structuredClone(lead);
+    post.fetchResults.rawData.postText = text;
+    const identity = evaluateCotIdentity(post, { ...claim, evidenceQuote: text });
+    assert.equal(identity.status, 'matched', `expected matched for ${JSON.stringify(text)}`);
+  }
+});
+
+test('a pronoun-less event still fails when the model does not claim it as its own', () => {
+  const text = 'The Old Mill is under new ownership.';
+  const post = structuredClone(lead);
+  post.fetchResults.rawData.postText = text;
+  for (const invalid of [{ ...claim, relationship: 'third_party', evidenceQuote: text },
+    { ...claim, businessName: 'The Old Mill', evidenceQuote: text }]) {
+    assert.notEqual(evaluateCotIdentity(post, invalid).status, 'matched');
   }
 });

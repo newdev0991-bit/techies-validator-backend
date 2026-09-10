@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { createCotBatchHandler } from '../server.js';
+import { cotActorPhaseOptions } from '../src/pipeline-capabilities.js';
 
 function responseRecorder() {
   return {
@@ -24,6 +25,48 @@ function batchBody(name = 'Alpha') {
     }]
   };
 }
+
+test('deadline retains batch ownership and replays late success without a second provider call', async () => {
+  let resolveWork, calls = 0;
+  const active = new Map();
+  const handler = createCotBatchHandler({
+    deadlineMs: 10, activeBatchesMap: active, completedBatchesMap: new Map(),
+    runBatchFn: () => { calls++; return new Promise(resolve => { resolveWork = resolve; }); }
+  });
+  const first = responseRecorder();
+  await handler({ body: batchBody() }, first);
+  assert.equal(first.statusCode, 503);
+  assert.equal(active.size, 1);
+  const retry = responseRecorder();
+  await handler({ body: batchBody() }, retry);
+  assert.equal(retry.statusCode, 503);
+  assert.equal(calls, 1);
+  const conflict = responseRecorder();
+  await handler({ body: batchBody('Different') }, conflict);
+  assert.equal(conflict.statusCode, 409);
+  const response = { success: true, batchId: 'cot:test:0', results: [] };
+  resolveWork(response);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(active.size, 0);
+  const completed = responseRecorder();
+  await handler({ body: batchBody() }, completed);
+  assert.deepEqual(completed.body, response);
+  assert.equal(calls, 1);
+});
+
+test('late provider rejection after a deadline releases ownership without an unhandled rejection', async () => {
+  let rejectWork;
+  const active = new Map();
+  const handler = createCotBatchHandler({
+    deadlineMs: 10, activeBatchesMap: active, completedBatchesMap: new Map(),
+    runBatchFn: () => new Promise((_, reject) => { rejectWork = reject; })
+  });
+  await handler({ body: batchBody() }, responseRecorder());
+  assert.equal(active.size, 1);
+  rejectWork(new Error('provider ended'));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(active.size, 0);
+});
 
 test('COT handler reports safe Apify rejection instead of a generic 500', async () => {
   const handler = createCotBatchHandler({
@@ -95,4 +138,63 @@ test('COT batch handler rejects malformed rows before provider work', async () =
   assert.equal(response.statusCode, 400);
   assert.equal(response.body.error.code, 'INVALID_BATCH');
   assert.equal(calls, 0);
+});
+
+test('an unexpected batch failure logs its cause but does not leak it to the caller', async () => {
+  // A 500 here makes the standalone pipeline halt with VALIDATION_RESULT_UNCERTAIN
+  // until an operator reconciles. Logging only "Unexpected non-provider error" left
+  // a recurring production halt with no evidence to diagnose it.
+  const logged = [];
+  const originalError = console.error;
+  console.error = (...args) => logged.push(args.join(' '));
+  const res = responseRecorder();
+  try {
+    const handler = createCotBatchHandler({
+      activeBatchesMap: new Map(),
+      completedBatchesMap: new Map(),
+      runBatchFn: async () => {
+        throw Object.assign(new Error('OpenAI request exceeded its hard deadline.'), { name: 'AbortError' });
+      }
+    });
+    await handler({ body: batchBody() }, res);
+  } finally {
+    console.error = originalError;
+  }
+
+  assert.equal(res.statusCode, 500);
+  assert.equal(res.body?.error?.code, 'BATCH_FAILED');
+  assert.ok(!JSON.stringify(res.body).includes('OpenAI'));
+  const all = logged.join('\n');
+  assert.match(all, /Unexpected non-provider error/);
+  assert.match(all, /AbortError/);
+  assert.match(all, /hard deadline/);
+});
+
+test('a missing required setting is reported as configuration, not a generic failure', async () => {
+  // COT_ACTOR_MAX_CHARGE_USD is required by cotActorPhaseOptions and throws before any
+  // Apify call. Reported as a bare 500 it is indistinguishable from a broken scraper,
+  // which is exactly how an unset variable stayed hidden through a whole deployment.
+  const handler = createCotBatchHandler({
+    completedBatchesMap: new Map(), activeBatchesMap: new Map(),
+    runBatchFn: async () => cotActorPhaseOptions('proof', {})
+  });
+  const response = responseRecorder();
+  await handler({ body: batchBody() }, response);
+
+  assert.equal(response.statusCode, 503);
+  assert.equal(response.body.error.code, 'BACKEND_NOT_CONFIGURED');
+  assert.match(response.body.error.message, /COT_ACTOR_MAX_CHARGE_USD/);
+});
+
+test('an unrelated internal error still stays opaque', async () => {
+  const handler = createCotBatchHandler({
+    completedBatchesMap: new Map(), activeBatchesMap: new Map(),
+    runBatchFn: async () => { throw new Error('SECRET internal detail'); }
+  });
+  const response = responseRecorder();
+  await handler({ body: batchBody() }, response);
+
+  assert.equal(response.statusCode, 500);
+  assert.equal(response.body.error.code, 'BATCH_FAILED');
+  assert.doesNotMatch(JSON.stringify(response.body), /SECRET/);
 });

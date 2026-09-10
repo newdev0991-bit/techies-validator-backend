@@ -1,6 +1,7 @@
 import { normalizeLead } from './card-data.js';
+import { googleContactSourceKind } from './contact-sources.js';
 import { isSuccessfulFacebookScrape, validateFacebookUrl } from './validation.js';
-import { normalizeUkContactPhone } from '../actor/src/contactValues.js';
+import { normalizeUkContactPhone, extractUkCaptionPhones } from '../actor/src/contactValues.js';
 import { searchContactsFromLead } from './search-author-contacts.js';
 import { proofAddresses, addressesAgree } from '../actor/src/proofAddress.js';
 export { normalizeUkContactPhone } from '../actor/src/contactValues.js';
@@ -53,9 +54,47 @@ export function enrichCotContacts(lead = {}, businessIdentity) {
   const phoneAllowed = usable && contact.identityStatus === 'matched'
     && contact.phoneVerified === true && phoneUrl && !isPublisherContact(phoneUrl)
     && (/^facebook-/.test(phoneSource) ? validateFacebookUrl(phoneUrl).ok
-      : /^google-official-website/.test(phoneSource) && contact.source === 'google-official-website');
+      // Any accepted Google source, and the phone must have been read from that same source.
+      : Boolean(googleContactSourceKind(contact.source)) && phoneSource.startsWith(contact.source));
   const phone = field(phoneAllowed ? normalizeUkContactPhone(contact.phone) : '',
     submitted.phone, phoneSource, phoneUrl, normalizeUkContactPhone);
+
+  // A number observed in the exact caption remains a candidate when identity is
+  // unresolved. Promote only a single number on a matched self-business proof.
+  const captionObserved = sameRow && isSuccessfulFacebookScrape(raw)
+    && raw.time_target_matched === true && !raw.scrape?.blocked
+    && !raw.scrape?.loginRequired && !raw.scrape?.notFound && !raw.business?.wrongBusiness;
+  const captionPhones = captionObserved ? extractUkCaptionPhones(raw.postText) : [];
+  const ownProof = usable && businessIdentity?.status === 'matched'
+    && businessIdentity.relationship === 'self';
+  phone.candidates = captionPhones.map(value => ({ value, source: 'facebook-post-contact',
+    sourceUrl: input.value, verified: ownProof }));
+  if (ownProof && captionPhones.length) {
+    phone.conflict ||= captionPhones.length > 1 || Boolean(phone.value && !captionPhones.includes(phone.value));
+    if (!phone.value && captionPhones.length === 1 && !phone.conflict) {
+      Object.assign(phone, field(captionPhones[0], submitted.phone, 'facebook-post-contact', input.value, normalizeUkContactPhone));
+    }
+  }
+
+  // A contact the Actor found for an OWN-business proof we could not tie to a Page.
+  // `usable` is false here, so nothing above can promote it -- and it must not, because
+  // the identity is unproven. But discarding it outright is what left the review queue
+  // full of rows reading "no verified UK business phone was found" with nothing for a
+  // reviewer to act on. It is carried as an explicitly unverified candidate with its
+  // source URL so a human can confirm it. `status`, `requiresManualReview` and
+  // `reviewReasons` below are computed from `.value` alone and are deliberately untouched
+  // by candidates, so an unproven identity still cannot reach READY. third_party is
+  // excluded: those contacts belong to the publisher, not to the business the post names.
+  const unprovenOwnBusiness = !usable && sameRow && isSuccessfulFacebookScrape(raw)
+    && businessIdentity?.relationship !== 'third_party' && !raw.business?.wrongBusiness
+    && !raw.scrape?.blocked && !raw.scrape?.loginRequired && !raw.scrape?.notFound;
+  if (unprovenOwnBusiness && !phone.value) {
+    const found = normalizeUkContactPhone(contact.phone);
+    if (found && phoneUrl && !phone.candidates.some(c => c.value === found))
+      phone.candidates.push({ value: found, source: phoneSource || 'actor-contact',
+        sourceUrl: phoneUrl, verified: false, identityUnproven: true });
+  }
+
   const addressUrl = sourceUrl(address.sourceUrl);
   const addressAllowed = usable && (raw.business?.identityStatus === 'matched' || businessIdentity?.status === 'matched')
     && address.verified === true && !isPublisherContact(addressUrl) &&
@@ -95,6 +134,7 @@ export function enrichCotContacts(lead = {}, businessIdentity) {
     status: conflicts ? 'review_required' : complete ? 'complete' : fields.some(item => item.value) ? 'partial' : 'unavailable',
     phone, address: fullAddress, postcode: postcodeField,
     requiresManualReview: conflicts || !complete,
+    reviewReasons: [...(!phone.value ? ['PHONE_MISSING'] : []), ...(businessIdentity?.requiresManualReview ? ['IDENTITY_UNRESOLVED'] : []), ...(conflicts ? ['CONTACT_CONFLICT'] : [])],
     warnings: [
       ...(businessIdentity?.requiresManualReview ? [businessIdentity.reason] : []),
       ...(!sameRow ? ['Contact evidence is missing or belongs to a different proof URL.'] : []),

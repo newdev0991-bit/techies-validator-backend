@@ -282,6 +282,78 @@ test('accepts missing contacts from a Google-matched official business website',
   );
 });
 
+test('accepts a phone from a Google-matched business listing, labelled as a listing', () => {
+  const response = buildCardDataResponse(
+    {
+      ...lead,
+      Name: 'Cheshire Roofing',
+      Address: '60 High Street, Macclesfield',
+      ZIP: 'SK11 8BR'
+    },
+    actorData({
+      pageName: 'Unconfirmed Facebook Account',
+      contact: {
+        phone: '01625 123456',
+        phoneVerified: true,
+        phoneSource: 'google-directory-listing-tel',
+        website: 'https://www.yell.com/biz/cheshire-roofing-macclesfield-1234',
+        source: 'google-directory-listing',
+        sourceUrl: 'https://www.yell.com/biz/cheshire-roofing-macclesfield-1234',
+        identityStatus: 'matched',
+        locationMatch: 'town',
+        searchQuery: '"Cheshire Roofing" macclesfield'
+      },
+      business: {
+        tradingStatus: 'active',
+        isChain: false,
+        isFranchise: false,
+        isLargeBusiness: false,
+        identityStatus: 'unconfirmed',
+        identityConfidence: 'low'
+      }
+    }),
+    { now: NOW }
+  );
+
+  // The whole point of the change: this phone used to be discarded here.
+  assert.equal(response.lead.phone, '01625 123456');
+  assert.equal(response.evidence.contact.phoneVerified, true);
+  assert.equal(response.evidence.contact.source, 'google-directory-listing');
+  assert.equal(response.evidence.contact.sourceKind, 'listing');
+  assert.equal(response.evidence.contact.locationMatch, 'town');
+  // A third-party listing never inherits a first-party site's confidence by default.
+  assert.equal(response.evidence.contact.identityConfidence, 'medium');
+  assert.ok(
+    response.analysis.successFactors.some((factor) => /business listing/i.test(factor)),
+    'a listing is described as one rather than as an official website'
+  );
+  assert.ok(
+    !response.analysis.successFactors.some((factor) => /official website/i.test(factor))
+  );
+});
+
+test('a registry listing is accepted, and an unknown Google source is not', () => {
+  const build = (source) => buildCardDataResponse(
+    { ...lead, Name: 'Cheshire Roofing', Address: '60 High Street, Macclesfield', ZIP: 'SK11 8BR' },
+    actorData({
+      pageName: 'Unconfirmed Facebook Account',
+      contact: {
+        phone: '01625 123456', phoneVerified: true, phoneSource: `${source}-tel`,
+        source, sourceUrl: 'https://example.test/record/1234', identityStatus: 'matched'
+      },
+      business: { tradingStatus: 'active', isChain: false, isFranchise: false,
+        isLargeBusiness: false, identityStatus: 'unconfirmed', identityConfidence: 'low' }
+    }),
+    { now: NOW }
+  );
+
+  assert.equal(build('google-registry-listing').lead.phone, '01625 123456');
+  // An unrecognised label must never become a callable contact.
+  const unknown = build('google-scraped-somewhere');
+  assert.equal(unknown.lead.phone, '');
+  assert.equal(unknown.evidence.contact.sourceKind, null);
+});
+
 test('rejects Google contacts when the official website identity is unconfirmed', () => {
   const response = buildCardDataResponse(
     lead,

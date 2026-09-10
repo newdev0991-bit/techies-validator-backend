@@ -137,9 +137,14 @@ test('HTTP analyze preserves legacy envelope and enforces reconciled freshness p
   });
   assert.equal(staleResponse.status, 200);
   const stale = JSON.parse((await staleResponse.json()).content[0].text);
+  // Revised spec: age no longer overwrites the verdict. This stub returns BAD on its
+  // own merits; what changed is that the reasoning now records the age as priority
+  // rather than as a rejection. See the applyFreshnessPolicy tests for the case that
+  // actually distinguishes the two -- a GOOD verdict surviving an over-threshold post.
   assert.equal(stale.verdict, 'BAD');
   assert.equal(stale.freshness.autoRejectEligible, true);
-  assert.match(stale.reasoning, /^\[AUTO REJECTED:/);
+  assert.match(stale.reasoning, /^\[LOW PRIORITY:/);
+  assert.doesNotMatch(stale.reasoning, /AUTO REJECTED/);
 
   const invalidPayload = await fetch(`${apiUrl}/analyze`, {
     method: 'POST',
