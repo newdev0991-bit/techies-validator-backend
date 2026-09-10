@@ -76,6 +76,25 @@ export function enrichCotContacts(lead = {}, businessIdentity) {
     }
   }
 
+  // A contact the Actor found for an OWN-business proof we could not tie to a Page.
+  // `usable` is false here, so nothing above can promote it -- and it must not, because
+  // the identity is unproven. But discarding it outright is what left the review queue
+  // full of rows reading "no verified UK business phone was found" with nothing for a
+  // reviewer to act on. It is carried as an explicitly unverified candidate with its
+  // source URL so a human can confirm it. `status`, `requiresManualReview` and
+  // `reviewReasons` below are computed from `.value` alone and are deliberately untouched
+  // by candidates, so an unproven identity still cannot reach READY. third_party is
+  // excluded: those contacts belong to the publisher, not to the business the post names.
+  const unprovenOwnBusiness = !usable && sameRow && isSuccessfulFacebookScrape(raw)
+    && businessIdentity?.relationship !== 'third_party' && !raw.business?.wrongBusiness
+    && !raw.scrape?.blocked && !raw.scrape?.loginRequired && !raw.scrape?.notFound;
+  if (unprovenOwnBusiness && !phone.value) {
+    const found = normalizeUkContactPhone(contact.phone);
+    if (found && phoneUrl && !phone.candidates.some(c => c.value === found))
+      phone.candidates.push({ value: found, source: phoneSource || 'actor-contact',
+        sourceUrl: phoneUrl, verified: false, identityUnproven: true });
+  }
+
   const addressUrl = sourceUrl(address.sourceUrl);
   const addressAllowed = usable && (raw.business?.identityStatus === 'matched' || businessIdentity?.status === 'matched')
     && address.verified === true && !isPublisherContact(addressUrl) &&
