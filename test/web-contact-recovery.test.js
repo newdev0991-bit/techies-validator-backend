@@ -154,3 +154,53 @@ test('the request asks for web search and carries no lead data beyond the busine
   assert.match(sent.body.input, /Taunton/);
   assert.match(sent.body.instructions, /never return a number you cannot point to a source for/i);
 });
+
+// Response shapes captured from real /v1/responses calls on 2026-09-10. Reduced to the
+// fields the code reads, but the STRUCTURE is verbatim -- in particular `annotations`
+// really does come back empty when the reply is a bare JSON object, which is what we
+// ask for. Reading citations only from annotations therefore discarded every result.
+const liveResponse = (openedUrls, json) => ({
+  output: [
+    { type: 'reasoning', summary: [] },
+    ...openedUrls.map(url => ({ type: 'web_search_call', status: 'completed',
+      action: { type: 'open_page', url } })),
+    { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: json, annotations: [] }] }
+  ]
+});
+
+test('a bare-JSON reply still yields provenance, from the pages the tool opened', () => {
+  // gpt-5.6-terra, verbatim: opened the page it went on to cite.
+  const payload = liveResponse(
+    ['https://catalogue.royalalberthall.com/'],
+    '{"phone":"020 7589 8212","sourceUrl":"https://catalogue.royalalberthall.com/","isBranchSpecific":true,"notes":"Box Office"}'
+  );
+  const parsed = parseRecovery(payload);
+  assert.deepEqual(parsed.citations.map(c => c.url), ['https://catalogue.royalalberthall.com/'],
+    'annotations are empty here; provenance has to come from the open_page actions');
+  assert.ok(parsed.citations.some(c => c.url === parsed.sourceUrl), 'the claimed source must verify');
+});
+
+test('a source the model never opened is caught, on real captured responses', async () => {
+  // gpt-5.5, verbatim: cited a contact page, but the only page it opened was an
+  // unrelated PDF about carol concerts. The number happened to be right; the source
+  // was not one it had read.
+  const invented = liveResponse(
+    ['https://d117kfg112vbe4.cloudfront.net/public/Royal-Albert-Hall-DAMS/Website-Documents/Carols.pdf'],
+    '{"phone":"020 7589 8212","sourceUrl":"https://catalogue.royalalberthall.com/contact.aspx","isBranchSpecific":true,"notes":""}'
+  );
+  const row1 = row();
+  await runWebContactRecovery([row1], { search: async () => parseRecovery(invented) });
+  assert.deepEqual(row1.analysis.contact_enrichment.phone.candidates, [],
+    'a number whose source the model never opened must not reach a reviewer');
+  assert.equal(row1.analysis.contact_lookup.webRecovery.discarded, 'source_not_in_citations');
+
+  // gpt-5.4, verbatim: opened NO page at all, answered from search snippets, cited the
+  // charity register, and produced a different number.
+  const unopened = liveResponse([],
+    '{"phone":"020 7959 0505","sourceUrl":"https://register-of-charities.charitycommission.gov.uk/en/charity-search/-/charity-details/254543/contact-information","isBranchSpecific":true,"notes":""}'
+  );
+  const row2 = row();
+  await runWebContactRecovery([row2], { search: async () => parseRecovery(unopened) });
+  assert.deepEqual(row2.analysis.contact_enrichment.phone.candidates, []);
+  assert.equal(row2.analysis.contact_lookup.webRecovery.discarded, 'source_not_in_citations');
+});

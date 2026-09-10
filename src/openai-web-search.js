@@ -35,16 +35,37 @@ const INSTRUCTIONS = [
   '{"phone": "<UK number as printed, or empty string>", "sourceUrl": "<the exact page URL you read it on, or empty string>", "isBranchSpecific": <true|false>, "notes": "<one short sentence>"}'
 ].join(' ');
 
-/** Extract the url_citation annotations the search tool produced (not model prose). */
+/**
+ * The pages the search tool actually fetched. Never model prose.
+ *
+ * Two sources, and the second matters more than it looks. `url_citation` annotations
+ * only attach to prose that cites something -- and we ask for a bare JSON object, so a
+ * successful lookup routinely comes back with an EMPTY annotation list. Verified live:
+ * a real lookup returned the right number and source with zero annotations, which would
+ * have made every recovered value fail the citation check and be discarded.
+ *
+ * `web_search_call` items carry an `action`, and when the tool opens a page that action
+ * is `{type:'open_page', url}`. That is a better provenance record than a citation
+ * anyway: it is the tool reporting what it fetched, rather than the model choosing what
+ * to footnote.
+ */
 export function citationsFrom(payload) {
   const out = [];
+  const add = (url, title) => {
+    if (typeof url === 'string' && url && !out.some(c => c.url === url)) out.push({ url, title: title || '' });
+  };
   for (const item of payload?.output || []) {
     for (const part of item?.content || []) {
       for (const note of part?.annotations || []) {
-        if (note?.type === 'url_citation' && typeof note.url === 'string') {
-          out.push({ url: note.url, title: typeof note.title === 'string' ? note.title : '' });
-        }
+        if (note?.type === 'url_citation') add(note.url, typeof note.title === 'string' ? note.title : '');
       }
+    }
+    if (item?.type === 'web_search_call') {
+      const action = item.action;
+      if (action?.type === 'open_page') add(action.url);
+      // Some actions carry the page under a different key or a list of results.
+      else if (typeof action?.url === 'string') add(action.url);
+      for (const result of action?.results || []) add(result?.url, result?.title);
     }
   }
   return out;
@@ -86,7 +107,7 @@ export function createWebContactSearch({ env = process.env, fetchImpl = fetch } 
   if (!webContactRecoveryEnabled(env)) return null;
   const apiKey = env.OPENAI_API_KEY;
   if (!apiKey) return null;
-  const model = env.WEB_SEARCH_MODEL || 'gpt-5.6';
+  const model = env.WEB_SEARCH_MODEL || 'gpt-5.6-terra';
   const timeoutMs = parsePositiveNumber(env.WEB_SEARCH_TIMEOUT_MS, 60_000, { min: 5_000, max: 120_000 });
 
   return async function searchForBusinessPhone(business, { location = '' } = {}) {

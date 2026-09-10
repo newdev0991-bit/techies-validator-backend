@@ -126,7 +126,7 @@ export function createWebVerdict({ env = process.env, fetchImpl = fetch } = {}) 
   if (!webVerdictEnabled(env)) return null;
   const apiKey = env.OPENAI_API_KEY;
   if (!apiKey) return null;
-  const model = env.WEB_VERDICT_MODEL || 'gpt-5.6';
+  const model = env.WEB_VERDICT_MODEL || 'gpt-5.6-terra';
   const timeoutMs = parsePositiveNumber(env.WEB_VERDICT_TIMEOUT_MS, 90_000, { min: 10_000, max: 180_000 });
 
   return async function verdictWithWebEvidence(basePrompt, systemMessage) {
