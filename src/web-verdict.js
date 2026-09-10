@@ -50,6 +50,7 @@ export const WEB_VERDICT_INSTRUCTIONS = [
   '(1) Does the lead address resolve to a COMMERCIAL premises or a PRIVATE RESIDENCE? Check maps and listings. A home address is a hard exclusion.',
   '(2) How many branches or sites does this business operate, and is it a national or regional chain? Ten or more sites, or a recognised chain, is a hard exclusion.',
   'Do NOT use the web to decide whether an opening or relocation happened, to date the post, to find contact details, or to second-guess the supplied evidence on anything else. The supplied post text and page evidence remain the only basis for those.',
+  'OPEN the page you intend to cite. Do not cite a URL you only saw listed in search results -- a citation you did not open is not evidence and will be discarded.',
   'Cite the page you read for each of the two findings. If you cannot find evidence for one, say so and leave it unknown rather than assuming.',
   'Report what you found in web_checks, and let it inform verdict and red_flags only through those two rules.'
 ].join(' ');

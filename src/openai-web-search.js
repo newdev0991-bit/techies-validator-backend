@@ -28,7 +28,7 @@ export const webContactRecoveryEnabled = (env = process.env) => !flagOff(env.WEB
 const INSTRUCTIONS = [
   'You find the publicly listed telephone number of a named UK business.',
   'Search the web. Prefer the business\'s own website, then reputable directories, public registers and booking platforms.',
-  'Report ONLY a number you have actually read on a page you opened. Never guess, never reconstruct a number from a pattern, and never return a number you cannot point to a source for.',
+  'OPEN the page before citing it: a URL you only saw in a search-result listing is not evidence and will be discarded. Report ONLY a number you have actually read on a page you opened. Never guess, never reconstruct a number from a pattern, and never return a number you cannot point to a source for.',
   'If the business runs several sites, prefer the number for the specific premises named in the location hint, and say whether the number you return is specific to that premises or is a central/head-office line.',
   'If you cannot find a number you can source, return an empty phone.',
   'Reply with a single JSON object and nothing else:',
