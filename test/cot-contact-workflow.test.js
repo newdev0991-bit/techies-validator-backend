@@ -90,15 +90,36 @@ test('GOOD opportunity behind a third-party publisher becomes delivery-ready onl
   assert.match(csv, /Synthetic Makers/); assert.doesNotMatch(csv, /01632960999/);
 });
 
-test('rejected, uncertain, stale, already complete, and unresolvable evidence do not spend another contact call', async () => {
+test('rejected, uncertain, undateable, already complete, and unresolvable evidence do not spend another contact call', async () => {
   const bad = fixture(); bad.analysis.quality_assessment.verdict = 'BAD';
   const unclear = fixture(); unclear.analysis.quality_assessment.verdict = 'UNCLEAR';
-  const stale = fixture(); stale.analysis.freshness.decision = 'stale';
+  // An unplaceable timestamp still blocks a paid lookup. That is the quality of the
+  // evidence, not the age of the post, and it is the same condition assess() uses to
+  // withhold READY.
+  const undateable = fixture();
+  undateable.analysis.freshness.decision = 'manual_review';
+  undateable.analysis.freshness.requiresManualReview = true;
   const unknown = fixture(); unknown.analysis.quality_assessment.business_identity.evidenceQuote = 'Invented';
   const complete = fixture(); complete.fetchResults = contacts(complete);
   complete.analysis = finalizeCotAnalysis({ ...complete.lead, fetchResults: complete.fetchResults }, complete.analysis.quality_assessment);
-  await runGoodLeadContactPhase([bad, unclear, stale, unknown, complete], { finalize: finalizeCotAnalysis,
+  await runGoodLeadContactPhase([bad, unclear, undateable, unknown, complete], { finalize: finalizeCotAnalysis,
     scrape: async () => assert.fail('No eligible work') });
+});
+
+// Regression. FRESHNESS_THRESHOLD_HOURS is 24, so gating this phase on
+// `decision === 'fresh'` denied a contact lookup to every GOOD lead over a day old --
+// which is what filled the review queue with `contacts: unavailable` rows while the
+// verdict itself had already stopped treating age as an eligibility gate.
+test('a stale good lead is still given its contact lookup, because age is priority not eligibility', async () => {
+  const stale = fixture();
+  stale.analysis.freshness.decision = 'stale';
+  stale.analysis.freshness.requiresManualReview = false;
+  let scraped = 0;
+  const [result] = await runGoodLeadContactPhase([stale], { finalize: finalizeCotAnalysis,
+    scrape: async rows => { scraped = rows.length; return [contacts(rows[0])]; } });
+  assert.equal(scraped, 1, 'the stale lead should have been sent for contact lookup');
+  assert.notEqual(result.analysis.contact_lookup?.status, 'identity_or_proof_unresolved');
+  assert.equal(result.analysis.contact_enrichment.phone.value, '01632960123');
 });
 
 test('missing address, wrong target binding and publisher contacts can never make a good opportunity READY', async () => {
@@ -159,4 +180,53 @@ test('short self quote recovers existing verified contacts without a paid call a
     const altered = structuredClone(completed); change(altered);
     assert.equal(assess(altered, Date.now()).status, expected);
   }
+});
+
+// Most of the review queue carries `contacts: unavailable` because an own-business post
+// that could not be tied to a Page failed the same gate as a post promoting somebody
+// else. Those are different hazards and are no longer refused together.
+test('an own-business proof we could not tie to a Page is looked up; a third-party one is not', async () => {
+  // relationship 'self' with a publisher name that does not match the business name:
+  // contactTargetFromProof cannot resolve a target, but this is not misattribution.
+  const unproven = fixture();
+  unproven.analysis.quality_assessment.business_identity.relationship = 'self';
+  assert.equal(contactTargetFromProof(unproven.fetchResults.rawData,
+    unproven.analysis.quality_assessment.business_identity), null, 'target must be unresolvable for this test');
+
+  let scraped = 0;
+  await runGoodLeadContactPhase([unproven], { finalize: finalizeCotAnalysis,
+    scrape: async rows => { scraped = rows.length; assert.equal(rows[0].contactTarget, undefined,
+      'an unproven lead must not be sent a fabricated contact target'); return [contacts(rows[0])]; } });
+  assert.equal(scraped, 1, 'the unproven own-business lead should have been looked up');
+
+  // A post promoting a different business still is not: those contacts are the publisher's.
+  const thirdParty = fixture();
+  thirdParty.analysis.quality_assessment.business_identity.evidenceQuote = 'Invented';
+  const [skipped] = await runGoodLeadContactPhase([thirdParty], { finalize: finalizeCotAnalysis,
+    scrape: async () => assert.fail('a third-party lead must not spend a contact call') });
+  assert.equal(skipped.analysis.contact_lookup.status, 'identity_or_proof_unresolved');
+});
+
+// The recovered number has to reach a reviewer WITHOUT ever counting as verified:
+// that is the whole basis on which looking up an unproven identity is safe.
+test('a contact found for an unproven identity is a candidate, never a verified contact', async () => {
+  const unproven = fixture();
+  unproven.analysis.quality_assessment.business_identity.relationship = 'self';
+  const [result] = await runGoodLeadContactPhase([unproven], { finalize: finalizeCotAnalysis,
+    scrape: async rows => [contacts(rows[0])] });
+
+  const enrichment = result.analysis.contact_enrichment;
+  assert.equal(enrichment.phone.value, '', 'an unproven identity must not yield a verified phone');
+  assert.equal(enrichment.status, 'unavailable', 'candidates must not change the contact status');
+  assert.equal(enrichment.requiresManualReview, true);
+  assert.deepEqual(enrichment.reviewReasons, ['PHONE_MISSING', 'IDENTITY_UNRESOLVED']);
+
+  const candidate = enrichment.phone.candidates.find(c => c.value === '01632960123');
+  assert.ok(candidate, 'the number the Actor found should be carried for a reviewer');
+  assert.equal(candidate.verified, false);
+  assert.equal(candidate.identityUnproven, true);
+  assert.ok(candidate.sourceUrl, 'a candidate without a source URL cannot be checked later');
+
+  // And it still cannot reach READY unattended.
+  assert.notEqual(assess(result, Date.now()).status, 'READY');
 });
