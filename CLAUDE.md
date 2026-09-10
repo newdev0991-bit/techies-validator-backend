@@ -84,7 +84,9 @@ The entire backend is contained in a single ESM module (`server.js`). This is in
    - `PORT` - Server port (default: 4000, Render uses 10000)
    - `APIFY_API_TOKEN` - Required for Apify actor execution
    - The COT Actor uses logged-out HTTP; Facebook account cookies are not read or forwarded.
-   - `MAX_CONCURRENCY` and `PER_REQUEST_DELAY_MS` - Documented but not yet implemented
+   - `ANALYZE_CONCURRENCY` - Parallel `analyzeLead` calls per batch (default 3, max 10)
+   - `OPENAI_MAX_RETRIES` - Retries for transient OpenAI 429/5xx with capped backoff (default 2); an exhausted balance fails fast as `OPENAI_QUOTA_EXHAUSTED` and is never retried
+   - `WEB_VERDICT` / `WEB_CONTACT_RECOVERY` - OFF by default; opt-in with `on`/`true`/`1`/`yes`. Both run `web_search` tool calls on `gpt-5.6-terra` and are the main API-cost drivers. Set an OpenAI monthly spend cap before enabling.
    - `DEBUG` - Reserved for future use
 
 ### Lead Data Structure

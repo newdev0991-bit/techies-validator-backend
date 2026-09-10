@@ -9,21 +9,22 @@ import { parsePositiveNumber } from './validation.js';
 // `url_citation` annotations produced by the search tool itself, which is what lets
 // runWebContactRecovery verify that the URL the model names is one it actually read.
 //
-// On by default; set WEB_CONTACT_RECOVERY to off/false/0/no to disable. A tool call
-// costs more than a plain completion, so the phase is still bounded: it only sees leads
-// the Actor left without a number, is capped by WEB_SEARCH_MAX_PER_BATCH, and is inert
-// without an API key.
+// OFF by default; set WEB_CONTACT_RECOVERY to on/true/1/yes to enable. A tool call on
+// gpt-5.6-terra costs many times a plain completion, and in the frontend batch path it
+// fires once per GOOD lead with no upstream admission gate -- an exhausted-balance
+// incident on 2026-09-11 traced to exactly this plus WEB_VERDICT. Turn it on only with
+// a spend cap set at OpenAI. It is still bounded when on: it only sees leads the Actor
+// left without a number, is capped by WEB_SEARCH_MAX_PER_BATCH, and is inert without a key.
 
 const RESPONSES_URL = 'https://api.openai.com/v1/responses';
 
-// On unless explicitly turned off, matching GOOGLE_CONTACT_FALLBACK elsewhere in the
-// service. The off-switch is deliberately forgiving: an operator who means "off" and
-// writes `false`, `0` or `no` must not end up paying for search because only one exact
-// spelling was honoured. Anything unrecognised leaves the capability ON, so the value
-// to reach for is one of these four.
+// Kept for callers/tests that still import them: the off-values remain recognised, but
+// enabling is now explicit opt-in (see flagOn) because the default carried real cost.
 export const OFF_VALUES = Object.freeze(['off', 'false', '0', 'no']);
 export const flagOff = value => OFF_VALUES.includes(String(value ?? '').trim().toLowerCase());
-export const webContactRecoveryEnabled = (env = process.env) => !flagOff(env.WEB_CONTACT_RECOVERY);
+export const ON_VALUES = Object.freeze(['on', 'true', '1', 'yes']);
+export const flagOn = value => ON_VALUES.includes(String(value ?? '').trim().toLowerCase());
+export const webContactRecoveryEnabled = (env = process.env) => flagOn(env.WEB_CONTACT_RECOVERY);
 
 const INSTRUCTIONS = [
   'You find the publicly listed telephone number of a named UK business.',

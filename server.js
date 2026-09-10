@@ -146,6 +146,28 @@ function withDeadline(promise, ms, onTimeout) {
   return Promise.race([promise, deadline]).finally(() => clearTimeout(timer));
 }
 
+// Bounded parallel map that preserves result order. The batch fan-out below used
+// Promise.all with no limit, so a COT_BATCH_SIZE of 10 fired 10 OpenAI calls at
+// once -- which is what turned one rate-limit or an exhausted balance into 10
+// identical 429s in the same second, and left the provider no room to pace us.
+async function mapWithConcurrency(items, limit, worker) {
+  const results = new Array(items.length);
+  let cursor = 0;
+  const width = Math.max(1, Math.min(limit, items.length || 1));
+  const runners = Array.from({ length: width }, async () => {
+    while (cursor < items.length) {
+      const index = cursor++;
+      results[index] = await worker(items[index], index);
+    }
+  });
+  await Promise.all(runners);
+  return results;
+}
+
+function analyzeConcurrency() {
+  return parsePositiveNumber(process.env.ANALYZE_CONCURRENCY, 3, { min: 1, max: 10 });
+}
+
 function configuredCotBatchSize(value = process.env.COT_BATCH_SIZE) {
   const numeric = Number(value);
   return Number.isSafeInteger(numeric) && numeric >= 1 && numeric <= 10 ? numeric : 3;
@@ -470,51 +492,74 @@ async function analyzeLead(lead) {
       }
     }
   }
-  const controller = new AbortController();
-  const abortTimer = setTimeout(() => controller.abort(), timeoutMs);
-  // Belt and braces: aborting the fetch signal does not always unblock a body
-  // read that is stuck on a half-open upstream socket. This hard race rejects
-  // regardless, and also fires the abort so the socket is actually torn down.
-  const hardTimeout = () => {
-    controller.abort();
-    return Object.assign(new Error('OpenAI request exceeded its hard deadline.'), {
-      name: 'AbortError'
-    });
-  };
+  const maxRetries = parsePositiveNumber(process.env.OPENAI_MAX_RETRIES, 2, { min: 0, max: 5 });
+  const requestBody = JSON.stringify({
+    model,
+    messages: [
+      { role: 'system', content: systemMsg },
+      { role: 'user', content: buildPrompt(analysisLead) }
+    ],
+    temperature: 0.2,
+    max_tokens: 900,
+    response_format: { type: 'json_object' }
+  });
+
   let r;
   let raw;
-  try {
-    r = await withDeadline(fetch(base, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${OPENAI_API_KEY}`
-      },
-      signal: controller.signal,
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: 'system', content: systemMsg },
-          { role: 'user', content: buildPrompt(analysisLead) }
-        ],
-        temperature: 0.2,
-        max_tokens: 900,
-        response_format: { type: 'json_object' }
-      })
-    }), timeoutMs + 5_000, hardTimeout);
-    raw = await withDeadline(r.text(), 15_000, hardTimeout);
-  } catch (error) {
-    if (error?.name === 'AbortError') {
-      throw new PublicError(504, 'OPENAI_TIMEOUT', 'Lead analysis timed out. Please try again.');
+  for (let attempt = 0; ; attempt++) {
+    const controller = new AbortController();
+    const abortTimer = setTimeout(() => controller.abort(), timeoutMs);
+    // Belt and braces: aborting the fetch signal does not always unblock a body
+    // read that is stuck on a half-open upstream socket. This hard race rejects
+    // regardless, and also fires the abort so the socket is actually torn down.
+    const hardTimeout = () => {
+      controller.abort();
+      return Object.assign(new Error('OpenAI request exceeded its hard deadline.'), {
+        name: 'AbortError'
+      });
+    };
+    try {
+      r = await withDeadline(fetch(base, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${OPENAI_API_KEY}`
+        },
+        signal: controller.signal,
+        body: requestBody
+      }), timeoutMs + 5_000, hardTimeout);
+      raw = await withDeadline(r.text(), 15_000, hardTimeout);
+    } catch (error) {
+      if (error?.name === 'AbortError') {
+        throw new PublicError(504, 'OPENAI_TIMEOUT', 'Lead analysis timed out. Please try again.');
+      }
+      throw new PublicError(502, 'OPENAI_UNAVAILABLE', 'Lead analysis provider is unavailable.');
+    } finally {
+      clearTimeout(abortTimer);
     }
-    throw new PublicError(502, 'OPENAI_UNAVAILABLE', 'Lead analysis provider is unavailable.');
-  } finally {
-    clearTimeout(abortTimer);
-  }
 
-  if (!r.ok) {
-    console.error(`[analyze] OpenAI request failed with status ${r.status}.`);
-    throw new PublicError(502, 'OPENAI_UPSTREAM_ERROR', 'Lead analysis provider returned an error.');
+    if (r.ok) break;
+
+    // An exhausted credit balance is also a 429, but no amount of backoff fixes
+    // it -- fail fast and name it so the operator tops up rather than watching
+    // every lead retry and still fail. (This was the 2026-09-11 incident.)
+    if (r.status === 429 && /insufficient_quota|exceeded your current quota|billing_hard_limit|check your plan and billing/i.test(raw || '')) {
+      console.error('[analyze] OpenAI quota/billing exhausted -- add credits at platform.openai.com/settings/organization/billing.');
+      throw new PublicError(502, 'OPENAI_QUOTA_EXHAUSTED', 'Lead analysis provider balance is exhausted.');
+    }
+
+    const retryable = [429, 500, 502, 503, 504].includes(r.status);
+    if (!retryable || attempt >= maxRetries) {
+      console.error(`[analyze] OpenAI request failed with status ${r.status}.`);
+      throw new PublicError(502, 'OPENAI_UPSTREAM_ERROR', 'Lead analysis provider returned an error.');
+    }
+
+    const retryAfterMs = Number(r.headers.get('retry-after')) * 1000;
+    const backoffMs = Number.isFinite(retryAfterMs) && retryAfterMs > 0
+      ? Math.min(retryAfterMs, 20_000)
+      : Math.min(1_000 * 2 ** attempt, 8_000) + Math.floor(Math.random() * 400);
+    console.warn(`[analyze] OpenAI ${r.status}; retry ${attempt + 1}/${maxRetries} in ${backoffMs}ms.`);
+    await new Promise(resolve => setTimeout(resolve, backoffMs));
   }
 
   let aiResponse;
@@ -871,7 +916,7 @@ async function runCotValidationBatch(batchId, fingerprint, rows) {
     cacheCotBatch(cotBatchEvidence, batchId, fingerprint, fetchResultsByPosition);
   }
 
-  const results = await Promise.all(rows.map(async (row, position) => {
+  const results = await mapWithConcurrency(rows, analyzeConcurrency(), async (row, position) => {
     const fetchResults = fetchResultsByPosition[position];
     const leadForAnalysis = fetchResults ? { ...row.lead, fetchResults } : row.lead;
     const analysis = await analyzeLead(leadForAnalysis);
@@ -883,7 +928,7 @@ async function runCotValidationBatch(batchId, fingerprint, rows) {
       fetchResults,
       analysis
     };
-  }));
+  });
   await runGoodLeadContactPhase(results, {
     scrape: candidates => runFacebookActorBatch(candidates, 'contacts'), finalize: finalizeCotAnalysis,
   });

@@ -1,5 +1,5 @@
 import { parsePositiveNumber } from './validation.js';
-import { citationsFrom, outputTextFrom, flagOff } from './openai-web-search.js';
+import { citationsFrom, outputTextFrom, flagOn } from './openai-web-search.js';
 
 // A verdict reached WITH web evidence, for the two spec rules the pipeline cannot
 // otherwise enforce.
@@ -34,13 +34,16 @@ import { citationsFrom, outputTextFrom, flagOff } from './openai-web-search.js';
 // contract downstream are untouched. If it fails or is switched off, the caller uses
 // the plain call; a browsing failure must never fail a lead.
 //
-// On by default; set WEB_VERDICT to off/false/0/no to fall back to the plain
-// completion for every lead.
+// OFF by default; set WEB_VERDICT to on/true/1/yes to reach the verdict with web
+// evidence. It runs a gpt-5.6-terra web_search call for every lead that reaches the
+// backend -- the frontend batch path has no upstream admission gate -- so it is opt-in
+// and should only be turned on with a spend cap set at OpenAI. When off, every lead
+// falls back to the plain completion.
 
 const RESPONSES_URL = 'https://api.openai.com/v1/responses';
 
-// On unless explicitly turned off. See flagOff for the accepted off-values.
-export const webVerdictEnabled = (env = process.env) => !flagOff(env.WEB_VERDICT);
+// Explicit opt-in. See flagOn for the accepted on-values.
+export const webVerdictEnabled = (env = process.env) => flagOn(env.WEB_VERDICT);
 
 // Added to the existing prompt, not a replacement for it. The base prompt's evidence
 // rules stay in force for everything they cover; this narrows what the web may be used

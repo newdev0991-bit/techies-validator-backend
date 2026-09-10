@@ -107,18 +107,20 @@ test('the paid lookup is capped per batch and a failure never becomes a retry', 
   assert.equal(failing.analysis.contact_lookup.webRecovery.status, 'web_recovery_failed');
 });
 
-test('the capability is on by default and takes any plain spelling of off', () => {
-  assert.equal(webContactRecoveryEnabled({}), true, 'unset means on');
-  assert.equal(webContactRecoveryEnabled({ WEB_CONTACT_RECOVERY: 'on' }), true);
-  // Whichever spelling of "off" an operator reaches for must actually stop the spend.
-  for (const off of ['off', 'false', '0', 'no', 'OFF', ' False ', 'No'])
-    assert.equal(webContactRecoveryEnabled({ WEB_CONTACT_RECOVERY: off }), false, `${JSON.stringify(off)} must disable it`);
-  // Anything unrecognised leaves it on rather than silently disabling paid recovery.
-  assert.equal(webContactRecoveryEnabled({ WEB_CONTACT_RECOVERY: 'maybe' }), true);
+test('the capability is off by default and takes any plain spelling of on', () => {
+  assert.equal(webContactRecoveryEnabled({}), false, 'unset means off');
+  // Whichever spelling of "on" an operator reaches for must actually enable it.
+  for (const on of ['on', 'true', '1', 'yes', 'ON', ' True ', 'Yes'])
+    assert.equal(webContactRecoveryEnabled({ WEB_CONTACT_RECOVERY: on }), true, `${JSON.stringify(on)} must enable it`);
+  for (const off of ['off', 'false', '0', 'no'])
+    assert.equal(webContactRecoveryEnabled({ WEB_CONTACT_RECOVERY: off }), false, `${JSON.stringify(off)} stays off`);
+  // Anything unrecognised stays off rather than silently turning on paid recovery.
+  assert.equal(webContactRecoveryEnabled({ WEB_CONTACT_RECOVERY: 'maybe' }), false);
 
-  assert.equal(createWebContactSearch({ env: {} }), null, 'no API key, no search');
+  assert.equal(createWebContactSearch({ env: {} }), null, 'off by default, no search');
+  assert.equal(createWebContactSearch({ env: { WEB_CONTACT_RECOVERY: 'on' } }), null, 'no API key, no search');
   assert.equal(createWebContactSearch({ env: { WEB_CONTACT_RECOVERY: 'off', OPENAI_API_KEY: 'k' } }), null);
-  assert.equal(typeof createWebContactSearch({ env: { OPENAI_API_KEY: 'k' } }), 'function');
+  assert.equal(typeof createWebContactSearch({ env: { WEB_CONTACT_RECOVERY: 'on', OPENAI_API_KEY: 'k' } }), 'function');
 });
 
 test('the Responses payload is read for citations and the model’s JSON', () => {
@@ -143,7 +145,7 @@ test('the Responses payload is read for citations and the model’s JSON', () =>
 test('the request asks for web search and carries no lead data beyond the business', async () => {
   let sent;
   const search = createWebContactSearch({
-    env: { OPENAI_API_KEY: 'k' },
+    env: { WEB_CONTACT_RECOVERY: 'on', OPENAI_API_KEY: 'k' },
     fetchImpl: async (url, init) => { sent = { url, body: JSON.parse(init.body) };
       return { ok: true, json: async () => ({ output: [] }) }; }
   });
