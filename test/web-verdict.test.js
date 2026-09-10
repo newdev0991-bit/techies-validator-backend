@@ -75,17 +75,20 @@ test('browsing is scoped to the two rules a scrape cannot settle', () => {
   assert.match(WEB_VERDICT_INSTRUCTIONS, /Cite the page you read/);
 });
 
-test('the capability is off unless switched on, and needs a key', () => {
-  assert.equal(webVerdictEnabled({}), false);
-  assert.equal(webVerdictEnabled({ WEB_VERDICT: 'true' }), false, 'only the exact value arms it');
+test('the capability is on by default and takes any plain spelling of off', () => {
+  assert.equal(webVerdictEnabled({}), true, 'unset means on');
   assert.equal(webVerdictEnabled({ WEB_VERDICT: 'on' }), true);
-  assert.equal(createWebVerdict({ env: {} }), null);
-  assert.equal(createWebVerdict({ env: { WEB_VERDICT: 'on' } }), null, 'no API key, no browsing');
-  assert.equal(typeof createWebVerdict({ env: { WEB_VERDICT: 'on', OPENAI_API_KEY: 'k' } }), 'function');
+  for (const off of ['off', 'false', '0', 'no', 'OFF', ' False ', 'No'])
+    assert.equal(webVerdictEnabled({ WEB_VERDICT: off }), false, `${JSON.stringify(off)} must disable it`);
+  assert.equal(webVerdictEnabled({ WEB_VERDICT: 'maybe' }), true, 'unrecognised leaves it on');
+
+  assert.equal(createWebVerdict({ env: {} }), null, 'no API key, no browsing');
+  assert.equal(createWebVerdict({ env: { WEB_VERDICT: 'off', OPENAI_API_KEY: 'k' } }), null);
+  assert.equal(typeof createWebVerdict({ env: { OPENAI_API_KEY: 'k' } }), 'function');
 });
 
 test('a provider failure yields null so the lead falls back to the plain call', async () => {
-  const env = { WEB_VERDICT: 'on', OPENAI_API_KEY: 'k' };
+  const env = { OPENAI_API_KEY: 'k' };
   const http500 = createWebVerdict({ env, fetchImpl: async () => ({ ok: false, status: 500 }) });
   assert.equal(await http500('prompt', 'system'), null);
 
@@ -99,7 +102,7 @@ test('a provider failure yields null so the lead falls back to the plain call', 
 test('the request carries the search tool and asks for the web_checks block', async () => {
   let sent;
   const verdict = createWebVerdict({
-    env: { WEB_VERDICT: 'on', OPENAI_API_KEY: 'k' },
+    env: { OPENAI_API_KEY: 'k' },
     fetchImpl: async (url, init) => { sent = { url, body: JSON.parse(init.body) };
       return { ok: true, json: async () => ({ output: [{ type: 'message', content: [{ type: 'output_text',
         text: `{"verdict":"BAD","reasoning":"Home address.","web_checks":{"premises_type":"residential","premises_evidence_url":"${MAP}"}}`,

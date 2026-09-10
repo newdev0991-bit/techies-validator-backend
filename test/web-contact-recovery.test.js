@@ -107,13 +107,18 @@ test('the paid lookup is capped per batch and a failure never becomes a retry', 
   assert.equal(failing.analysis.contact_lookup.webRecovery.status, 'web_recovery_failed');
 });
 
-test('the capability is off unless switched on, and needs a key', () => {
-  assert.equal(webContactRecoveryEnabled({}), false);
-  assert.equal(webContactRecoveryEnabled({ WEB_CONTACT_RECOVERY: 'true' }), false, 'only the exact value arms it');
+test('the capability is on by default and takes any plain spelling of off', () => {
+  assert.equal(webContactRecoveryEnabled({}), true, 'unset means on');
   assert.equal(webContactRecoveryEnabled({ WEB_CONTACT_RECOVERY: 'on' }), true);
-  assert.equal(createWebContactSearch({ env: {} }), null);
-  assert.equal(createWebContactSearch({ env: { WEB_CONTACT_RECOVERY: 'on' } }), null, 'no API key, no search');
-  assert.equal(typeof createWebContactSearch({ env: { WEB_CONTACT_RECOVERY: 'on', OPENAI_API_KEY: 'k' } }), 'function');
+  // Whichever spelling of "off" an operator reaches for must actually stop the spend.
+  for (const off of ['off', 'false', '0', 'no', 'OFF', ' False ', 'No'])
+    assert.equal(webContactRecoveryEnabled({ WEB_CONTACT_RECOVERY: off }), false, `${JSON.stringify(off)} must disable it`);
+  // Anything unrecognised leaves it on rather than silently disabling paid recovery.
+  assert.equal(webContactRecoveryEnabled({ WEB_CONTACT_RECOVERY: 'maybe' }), true);
+
+  assert.equal(createWebContactSearch({ env: {} }), null, 'no API key, no search');
+  assert.equal(createWebContactSearch({ env: { WEB_CONTACT_RECOVERY: 'off', OPENAI_API_KEY: 'k' } }), null);
+  assert.equal(typeof createWebContactSearch({ env: { OPENAI_API_KEY: 'k' } }), 'function');
 });
 
 test('the Responses payload is read for citations and the model’s JSON', () => {
@@ -138,7 +143,7 @@ test('the Responses payload is read for citations and the model’s JSON', () =>
 test('the request asks for web search and carries no lead data beyond the business', async () => {
   let sent;
   const search = createWebContactSearch({
-    env: { WEB_CONTACT_RECOVERY: 'on', OPENAI_API_KEY: 'k' },
+    env: { OPENAI_API_KEY: 'k' },
     fetchImpl: async (url, init) => { sent = { url, body: JSON.parse(init.body) };
       return { ok: true, json: async () => ({ output: [] }) }; }
   });

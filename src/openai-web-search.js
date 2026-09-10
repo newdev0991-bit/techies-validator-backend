@@ -9,12 +9,21 @@ import { parsePositiveNumber } from './validation.js';
 // `url_citation` annotations produced by the search tool itself, which is what lets
 // runWebContactRecovery verify that the URL the model names is one it actually read.
 //
-// Off unless WEB_CONTACT_RECOVERY=on. A tool call costs more than a plain completion,
-// so it must never switch itself on.
+// On by default; set WEB_CONTACT_RECOVERY to off/false/0/no to disable. A tool call
+// costs more than a plain completion, so the phase is still bounded: it only sees leads
+// the Actor left without a number, is capped by WEB_SEARCH_MAX_PER_BATCH, and is inert
+// without an API key.
 
 const RESPONSES_URL = 'https://api.openai.com/v1/responses';
 
-export const webContactRecoveryEnabled = (env = process.env) => env.WEB_CONTACT_RECOVERY === 'on';
+// On unless explicitly turned off, matching GOOGLE_CONTACT_FALLBACK elsewhere in the
+// service. The off-switch is deliberately forgiving: an operator who means "off" and
+// writes `false`, `0` or `no` must not end up paying for search because only one exact
+// spelling was honoured. Anything unrecognised leaves the capability ON, so the value
+// to reach for is one of these four.
+export const OFF_VALUES = Object.freeze(['off', 'false', '0', 'no']);
+export const flagOff = value => OFF_VALUES.includes(String(value ?? '').trim().toLowerCase());
+export const webContactRecoveryEnabled = (env = process.env) => !flagOff(env.WEB_CONTACT_RECOVERY);
 
 const INSTRUCTIONS = [
   'You find the publicly listed telephone number of a named UK business.',

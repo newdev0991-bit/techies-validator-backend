@@ -1,5 +1,5 @@
 import { parsePositiveNumber } from './validation.js';
-import { citationsFrom, outputTextFrom } from './openai-web-search.js';
+import { citationsFrom, outputTextFrom, flagOff } from './openai-web-search.js';
 
 // A verdict reached WITH web evidence, for the two spec rules the pipeline cannot
 // otherwise enforce.
@@ -33,10 +33,14 @@ import { citationsFrom, outputTextFrom } from './openai-web-search.js';
 // returns, so normalizeAiResponse, constrainAnalysisToEvidence and the whole batch
 // contract downstream are untouched. If it fails or is switched off, the caller uses
 // the plain call; a browsing failure must never fail a lead.
+//
+// On by default; set WEB_VERDICT to off/false/0/no to fall back to the plain
+// completion for every lead.
 
 const RESPONSES_URL = 'https://api.openai.com/v1/responses';
 
-export const webVerdictEnabled = (env = process.env) => env.WEB_VERDICT === 'on';
+// On unless explicitly turned off. See flagOff for the accepted off-values.
+export const webVerdictEnabled = (env = process.env) => !flagOff(env.WEB_VERDICT);
 
 // Added to the existing prompt, not a replacement for it. The base prompt's evidence
 // rules stay in force for everything they cover; this narrows what the web may be used
