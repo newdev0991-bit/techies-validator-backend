@@ -246,8 +246,10 @@ EVIDENCE INTEGRITY RULES:
 VALIDATION CONTEXT:
 You're evaluating leads for a UK-based B2B service company. Good leads are:
 - New businesses or grand openings (Note: freshness is calculated automatically by the system)
-- Business relocations or expansions to new locations
-- New ownership/management changes
+- Business relocations, or expansion into a genuine second/additional site (not the
+  existing site getting bigger - see EXPANSION below)
+- New ownership/management changes, including reopening under a new operator (not a
+  routine reopening after a break with the same owner and site - see REOPENING below)
 - Businesses that genuinely need B2B services (restaurants, retail shops, offices, salons, etc.)
 - Phone and address are required for delivery; the contact scraper retrieves them after this opportunity assessment
 - Must be in serviceable UK locations
@@ -270,13 +272,38 @@ Bad leads are:
 - Businesses clearly not needing B2B services
 - Missing contact information alone is not a reason to classify a business opportunity as BAD
 
+EXPANSION: A SECOND SITE IS GOOD, GROWING THE EXISTING ONE IS NOT:
+- GOOD: a second/additional standalone location that a customer could visit or be served
+  from - a new branch, second shop, second clinic, extra unit, taking on a second premises
+  while keeping the first. The business having traded for years, or already having other
+  branches, does not disqualify a genuine new one (see "under 10 branches" as a size signal
+  the backend checks separately; do not reject on branch count yourself).
+- NOT_A_LEAD: the SAME site getting bigger or busier - more racking, a bigger kitchen, an
+  extra treatment room, a new reception, knocking through into next door, more staff,
+  more capacity. Nothing here is a second address a customer could go to instead.
+- The test is "is there now a second address", not "did the business grow". A growing
+  business staying at one address is NOT_A_LEAD; a second address is GOOD even for an
+  established multi-branch business.
+
+REOPENING: A REAL CHANGE OF OPERATOR OR SITE IS GOOD, COMING BACK AS-IS IS NOT:
+- GOOD: reopening under new ownership or management, reopening after being fully closed
+  under a new operator, reopening at a new/relocated site. The site or the operator has
+  genuinely changed, even if the trading name or trade stayed the same.
+- NOT_A_LEAD: reopening after a holiday, refurbishment, stocktake, staff illness, weather
+  closure, or a seasonal break, with the same owner/operator returning to the same site.
+  "We're back!", "open again from Monday", "back after the break" with no ownership or
+  premises change are NOT_A_LEAD, however long the closure was.
+- The test is "did the operator or the site change", not "was it closed for a while".
+
 MINOR UPDATES -> NOT_A_LEAD (these are not premises events, and not exclusions):
 - New products/services: "new menu", "new items", "new pricelist", "new services", "new offers"
 - Cosmetic changes: "new decor", "new look", "renovated", "refurbished", "new paint"
-- Partial expansions: "upstairs only", "new section", "new floor", "expansion area"
+- Internal-only growth: "upstairs only", "new section", "new floor", "expansion area", more
+  capacity/racking/seating at the same address (see EXPANSION above)
 - Equipment/furniture: "new equipment", "new furniture", "new stand", "new display"
 - Generic referrals without a named business and explicit qualifying opening/relocation event
 - Staff changes only: "new staff", "new team member" (unless combined with "new ownership")
+- Routine reopening with no ownership or premises change (see REOPENING above)
 
 CRITICAL FACTORS TO CONSIDER:
 1. Caption Analysis:
@@ -381,6 +408,23 @@ MAYBE (premises event plausible, evidence incomplete):
 GOOD despite already trading (revised rule):
 - "After 12 years on the high street we've moved to our new premises on Oak Road"
   + Established business, but a genuine relocation to new premises + GOOD
+
+GOOD (second site, existing business):
+- "So excited to open our second salon in Didsbury! Our original Chorlton salon isn't
+  going anywhere - see you at both!"
+  + A real second address, existing branch keeps trading + GOOD
+
+NOT_A_LEAD (same site, more of it):
+- "We've knocked through into the unit next door - double the space, double the racking!"
+  + Bigger, same address, no second site + NOT_A_LEAD
+
+GOOD (reopening under a new operator):
+- "Delighted to reopen the old Ivy House pub under new ownership this Friday"
+  + Closed venue, genuine new operator taking it on + GOOD
+
+NOT_A_LEAD (routine reopening):
+- "We're back open again after our summer break - see you all Monday!"
+  + Same owner, same site, ordinary seasonal closure + NOT_A_LEAD
 
 Analyze this lead carefully and provide your assessment in json format:
 

@@ -115,3 +115,25 @@ test('nonempty capped samples cannot prove a new page or lifetime volume', () =>
     assert.deepEqual(constrained.key_factors, ['Explicit relocation']);
   }
 });
+
+// Balanced-validation pass (2026-09-13): the dashboard showed most rejections
+// falling into "internal expansion" and "routine reopening" being conflated with
+// their genuine-COT-event counterparts (a second site; a change of operator/site).
+// Lock the prompt's explicit second-site-vs-same-site and new-operator-vs-routine
+// distinctions in place so a future edit cannot silently narrow them back.
+test('prompt distinguishes a genuine second site from growing the existing one', () => {
+  const prompt = buildPrompt({ 'Company Name': 'Example Salon' });
+  assert.match(prompt, /SECOND SITE IS GOOD, GROWING THE EXISTING ONE IS NOT/);
+  assert.match(prompt, /second\/additional standalone location/);
+  assert.match(prompt, /is there now a second address/i);
+  assert.match(prompt, /second salon in Didsbury/);
+  assert.match(prompt, /knocked through into the unit next door/);
+});
+
+test('prompt distinguishes reopening under a new operator from a routine reopening', () => {
+  const prompt = buildPrompt({ 'Company Name': 'Example Pub' });
+  assert.match(prompt, /A REAL CHANGE OF OPERATOR OR SITE IS GOOD, COMING BACK AS-IS IS NOT/);
+  assert.match(prompt, /did the operator or the site change/i);
+  assert.match(prompt, /reopen the old Ivy House pub under new ownership/);
+  assert.match(prompt, /back open again after our summer break/);
+});
