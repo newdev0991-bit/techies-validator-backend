@@ -97,3 +97,25 @@ export function indexCotActorItems(entries, items, expectedContract = 'cot-data-
 
   return indexed;
 }
+
+// A whole logged-out session can be blocked (login wall, IP-level block) --
+// that is systemic and worth failing the batch over, since every row in it
+// is compromised the same way. A single row not scraping cleanly is not: it
+// used to be treated the same as a session block and fail every row in the
+// batch together, which discarded whichever rows DID succeed and, for a row
+// whose failure is not transient, reproduced the identical failure on every
+// retry with no forward progress ever possible (2026-09-12/13 incident).
+export function sessionBlocked(actorRows) {
+  return actorRows.some((item) =>
+    item?.scrape?.blocked === true || item?.scrape?.loginRequired === true
+      || item?.loginRequired === true || item?.auth_blocked_target === true
+  );
+}
+
+// null for a clean scrape; otherwise the Actor's own error/status, for a
+// per-row diagnostic log instead of a batch-wide guess.
+export function actorRowFailure(item) {
+  return String(item?.status || '').toLowerCase() === 'success'
+    ? null
+    : String(item?.error || item?.status || 'unknown');
+}

@@ -14,10 +14,12 @@ import {
   normalizeLead
 } from './src/card-data.js';
 import {
+  actorRowFailure,
   buildCotActorInput,
   cotBatchFingerprint,
   indexCotActorItems,
-  readCotBatch
+  readCotBatch,
+  sessionBlocked
 } from './src/cot-batch.js';
 import { applyFreshnessPolicy, evaluateLeadFreshness } from './src/freshness.js';
 import { enrichCotContacts, cotLeadWithContacts } from './src/cot-contacts.js';
@@ -813,19 +815,22 @@ async function runFacebookActorBatch(rows, phase = 'proof') {
   }
 
   const actorRows = entries.map((entry) => indexed.get(entry.requestKey));
-  const sessionBlocked = actorRows.some((item) =>
-    item?.scrape?.blocked === true || item?.scrape?.loginRequired === true || item?.loginRequired === true || item?.auth_blocked_target === true
-  );
-  if (sessionBlocked) {
+  if (sessionBlocked(actorRows)) {
     throw new PublicError(503, 'session_blocked', 'Facebook refused the public logged-out request.');
   }
-  const retryableFailure = actorRows.some((item) => {
-    const unavailable = item?.scrape?.notFound === true || item?.notFound === true || /not found|unavailable|doesn't exist/i.test(String(item?.error || ''));
-    return !unavailable && String(item?.status || '').toLowerCase() !== 'success';
+  // A row that didn't scrape cleanly (blocked once, timed out, a dead link that
+  // doesn't match a "not found" message) used to fail the WHOLE batch here, so one
+  // bad URL discarded every other row's real result and forced a full paid re-run
+  // of all of them -- and if that row's failure is not transient, the identical
+  // batch fails identically forever with no forward progress (2026-09-12/13
+  // incident: the same 10-row batch re-ran across a dozen cycles over 90+ minutes).
+  // buildFetchResults already reports per-row success via isSuccessfulFacebookScrape,
+  // and analysis is already evidence-constrained, so a failed row proceeds as
+  // negative evidence for that lead alone instead of blocking its batch-mates.
+  actorRows.forEach((item, index) => {
+    const failure = actorRowFailure(item);
+    if (failure) console.warn(`[facebook-actor-batch] row ${entries[index].requestKey} did not scrape cleanly: ${failure}`);
   });
-  if (retryableFailure) {
-    throw new PublicError(503, 'actor_row_failure', 'Facebook did not settle every row in the batch.');
-  }
 
   return entries.map((entry, index) => buildFetchResults(actorRows[index], entry.url));
 }

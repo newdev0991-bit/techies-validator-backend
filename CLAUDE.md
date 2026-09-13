@@ -84,6 +84,16 @@ and several pure functions (`buildPrompt`, `constrainAnalysisToEvidence`, `final
   call the Actor and wait for completion, under a batch deadline and a per-request timeout, with
   a fingerprinted result cache. The Actor uses logged-out HTTP: no Facebook account cookies are
   read or forwarded. Errors log under a `[fetch-results]` prefix.
+  A single row failing its scrape (`sessionBlocked`/`actorRowFailure` in
+  [src/cot-batch.js](src/cot-batch.js)) does **not** fail the batch -- only a systemic session
+  block does. `buildFetchResults` already reports per-row success, and analysis is
+  evidence-constrained, so a failed row becomes negative evidence for that lead alone; a
+  `[facebook-actor-batch] row ... did not scrape cleanly` warning names it. Before 2026-09-13
+  any non-success, non-"not found" row threw for the whole batch, discarding every other row's
+  real result and, when that row's failure was not transient, repeating the identical failure
+  forever with no forward progress -- never widen this back to an all-or-nothing check.
+  `runGoodLeadContactPhase` ([src/cot-contact-workflow.js](src/cot-contact-workflow.js)) has the
+  same all-or-nothing shape for the contacts phase and has not been fixed the same way.
 
 ### src/
 
