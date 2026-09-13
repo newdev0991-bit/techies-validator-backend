@@ -137,3 +137,14 @@ test('prompt distinguishes reopening under a new operator from a routine reopeni
   assert.match(prompt, /reopen the old Ivy House pub under new ownership/);
   assert.match(prompt, /back open again after our summer break/);
 });
+
+// Casefile case 07 (2026-09-13): premises still being searched for/not yet signed
+// should be delivered early as a qualifying GOOD signal, not held back or treated
+// as a minor update. Lock this in so a future edit cannot silently revert it.
+test('prompt treats actively searching for premises as a qualifying GOOD signal', () => {
+  const prompt = buildPrompt({ 'Company Name': 'Example Bistro' });
+  assert.match(prompt, /PREMISES IN PROGRESS -> GOOD/);
+  assert.match(prompt, /deliver early, before the lease is even signed/i);
+  assert.match(prompt, /are they actively trying to secure a site/i);
+  assert.match(prompt, /looking for new premises/i);
+});

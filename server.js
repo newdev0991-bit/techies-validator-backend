@@ -250,6 +250,8 @@ You're evaluating leads for a UK-based B2B service company. Good leads are:
   existing site getting bigger - see EXPANSION below)
 - New ownership/management changes, including reopening under a new operator (not a
   routine reopening after a break with the same owner and site - see REOPENING below)
+- Actively searching for or securing new/additional premises, even before anything is
+  signed (see PREMISES IN PROGRESS below)
 - Businesses that genuinely need B2B services (restaurants, retail shops, offices, salons, etc.)
 - Phone and address are required for delivery; the contact scraper retrieves them after this opportunity assessment
 - Must be in serviceable UK locations
@@ -294,6 +296,16 @@ REOPENING: A REAL CHANGE OF OPERATOR OR SITE IS GOOD, COMING BACK AS-IS IS NOT:
   "We're back!", "open again from Monday", "back after the break" with no ownership or
   premises change are NOT_A_LEAD, however long the closure was.
 - The test is "did the operator or the site change", not "was it closed for a while".
+
+PREMISES IN PROGRESS -> GOOD (deliver early, before the lease is even signed):
+- GOOD: the business is actively searching for, viewing, or in the process of securing a new
+  or additional premises, even if nothing is signed yet - "looking for new premises", "on the
+  hunt for a new unit", "viewing sites for our second shop", "in talks to take on a new
+  location". Sales value is highest before a lease is signed, so treat this as a qualifying
+  opening/expansion signal in its own right, not as a MINOR UPDATE and not as something to
+  wait on until premises are secured.
+- The test is "are they actively trying to secure a site", not "have they signed one". Vague
+  future intent with no active search ("we'd love to expand one day") is still NOT_A_LEAD.
 
 MINOR UPDATES -> NOT_A_LEAD (these are not premises events, and not exclusions):
 - New products/services: "new menu", "new items", "new pricelist", "new services", "new offers"
