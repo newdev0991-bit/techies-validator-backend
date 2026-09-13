@@ -178,7 +178,12 @@ export function readStructuredAddresses(html) {
         const city = scalar(address.addressLocality);
         const postcode = scalar(address.postalCode);
         const country = scalar(address.addressCountry) || scalar(address.addressCountry?.name);
-        if (!street || !city || !/^(?:GIR\s?0AA|[A-Z]{1,2}\d[A-Z\d]?\s?\d[A-Z]{2})$/i.test(postcode)) continue;
+        // A named business is still a real, deliverable lead with just a town/city and
+        // postcode -- the street name is a bonus, not a requirement (2026-09-13 client
+        // instruction: an incomplete address is fine as long as it resolves to at least
+        // town/city + postcode). Only a postcode-less address is unusable: there is no
+        // town/city name UK-wide that narrows a location enough on its own.
+        if (!city || !/^(?:GIR\s?0AA|[A-Z]{1,2}\d[A-Z\d]?\s?\d[A-Z]{2})$/i.test(postcode)) continue;
         if (country && !/^(?:GB|GBR|UK|United Kingdom|England|Scotland|Wales|Northern Ireland)$/i.test(country)) continue;
         found.push({ name: node.name, postcode, full: [street, city, postcode, country].filter(Boolean).join(', ') });
       }

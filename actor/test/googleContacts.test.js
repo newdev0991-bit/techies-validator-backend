@@ -44,10 +44,9 @@ test('homepage phone does not suppress address lookup and retains its original U
   await readOfficialContacts(complete, lead, request, { readCandidate: async () => { assert.fail('complete home needs no follow-up'); } });
 });
 
-test('address ownership, postcode, completeness and branch ambiguity are enforced', () => {
+test('address ownership, postcode, and branch ambiguity are enforced', () => {
   for (const entries of [
     [{ name: 'Another Business', address: postal }],
-    [{ name: lead.name, address: { ...postal, streetAddress: '' } }],
     [{ name: lead.name, address: { ...postal, postalCode: 'M12 6FA' } }],
     [{ name: lead.name, address: { ...postal, addressCountry: 'US' } }],
     [{ name: lead.name, address: [postal, { ...postal, streetAddress: 'Second synthetic premises' }] }],
@@ -55,6 +54,16 @@ test('address ownership, postcode, completeness and branch ambiguity are enforce
     assert.equal(extractGoogleContact({ ...home, structuredAddresses: structured(entries) }, lead, request), null);
   }
   assert.deepEqual(readStructuredAddresses('<script type="application/ld+json">bad json</script>'), []);
+});
+
+// 2026-09-13 client instruction: an incomplete address is still a deliverable lead as
+// long as it resolves to at least a town/city and postcode -- a missing street name is
+// no longer disqualifying (only a missing/invalid postcode still is, since no UK town
+// or city name narrows a location on its own).
+test('a structured address with no street name still resolves to town/city plus postcode', () => {
+  const streetless = [{ name: lead.name, address: { ...postal, streetAddress: '' } }];
+  const found = extractGoogleContact({ ...home, structuredAddresses: structured(streetless) }, lead, request);
+  assert.equal(found.address, 'London, SW1A 1AA, GB');
 });
 
 test('off-site redirects cannot borrow identity; follow-up failure keeps earlier phone', async () => {
