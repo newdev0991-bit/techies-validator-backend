@@ -22,6 +22,20 @@ test('exact self-event quote and matched publisher pass identity without changin
   assert.equal(JSON.stringify(lead), snapshot);
 });
 
+// 2026-09-14: a Facebook page routinely drops the "Ltd"/"Limited"/"Plc" a business's
+// full company name carries -- e.g. the page is "Synthetic Example" but the lead's
+// Company Name (from the client's own records) is "Synthetic Example Ltd". That
+// typographical difference alone was pushing a genuine self-post to 'unresolved',
+// indistinguishable in outcome from an actually unrelated personal profile with a
+// coincidentally similar name. This must still fail closed on a REAL mismatch
+// (different business entirely), only pass on the suffix difference.
+test('a legal-suffix difference (Ltd/Limited/Plc) does not block a genuine self-match', () => {
+  const suffixed = { ...lead, 'Company Name': 'Synthetic Example Ltd' };
+  const identity = evaluateCotIdentity(suffixed, claim);
+  assert.equal(identity.status, 'matched');
+  assert.equal(enrichCotContacts(suffixed, identity).status, 'complete');
+});
+
 test('missing, invented, wrong-business or unrelated evidence fails closed for search authors', () => {
   for (const invalid of [null, {}, { ...claim, evidenceQuote: 'We are opening tomorrow at noon.' },
     { ...claim, businessName: 'Another Business' }, { ...claim, relationship: 'unknown' }]) {

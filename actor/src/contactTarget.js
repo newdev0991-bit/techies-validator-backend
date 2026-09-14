@@ -24,11 +24,16 @@ export function proofQuote(caption, quote) {
     return caption.slice(positions[start], positions[start + needle.length - 1] + 1);
 }
 
+// A legal-suffix-insensitive name key: "Bella's Nails Ltd" and "Bella's Nails" are the
+// same business typographically, not a mismatch -- Facebook page names routinely drop
+// the suffix a companies-house name carries. Shared so every self/third-party name
+// comparison treats this the same way, rather than each caller re-deriving its own key.
+export const looseNameKey = value => contactNameKey(value).replace(/\s+(?:ltd|limited|plc)$/, '').trim();
+
 export function sameVerifiedBusiness(raw, name) {
-    const key = value => contactNameKey(value).replace(/\s+(?:ltd|limited|plc)$/, '').trim();
     return raw?.business?.identityStatus === 'matched' && raw?.scrape?.success === true
         && raw.time_target_matched === true && !raw.business.wrongBusiness
-        && key(name).length >= 4 && key(raw.postAuthor || raw.pageName) === key(name);
+        && looseNameKey(name).length >= 4 && looseNameKey(raw.postAuthor || raw.pageName) === looseNameKey(name);
 }
 
 // Expand only an already literal self-claim into its immediate proof context.

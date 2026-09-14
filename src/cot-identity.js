@@ -1,5 +1,5 @@
 import { normalizeLead } from './card-data.js';
-import { resolvedContactTarget, proofQuote, sameVerifiedBusiness, identityProofQuote } from '../actor/src/contactTarget.js';
+import { resolvedContactTarget, proofQuote, sameVerifiedBusiness, identityProofQuote, looseNameKey } from '../actor/src/contactTarget.js';
 
 const text = value => typeof value === 'string' ? value.trim() : '';
 const nameKey = value => text(value).normalize('NFKD').toLowerCase()
@@ -34,7 +34,15 @@ export function evaluateCotIdentity(lead = {}, claim = {}) {
     status = 'third_party';
     reason = 'The proof promotes another business; publisher contacts cannot be attributed to that business.';
   } else if (imported && nameKey(company) && nameKey(publisher) && quotePresent && claim?.relationship === 'self' &&
-      (nameKey(businessName) === nameKey(company) || sameVerifiedBusiness(raw, businessName)) && nameKey(publisher) === nameKey(company) &&
+      // 2026-09-14: a Facebook page name routinely drops the "Ltd"/"Limited"/"Plc" a
+      // companies-house name carries -- that typographical difference alone was
+      // failing this match (both here and on the businessName check) and pushing a
+      // genuine self-post to 'unresolved', identical in outcome to an actually
+      // unrelated personal profile. looseNameKey compares with that suffix ignored;
+      // it does not loosen anything else this branch already requires (the literal
+      // quote, the self-event wording, the independent page-identity/scrape/time
+      // checks below all still apply unchanged).
+      (looseNameKey(businessName) === looseNameKey(company) || sameVerifiedBusiness(raw, businessName)) && looseNameKey(publisher) === looseNameKey(company) &&
       raw.business?.identityStatus === 'matched' && raw.scrape?.success === true &&
       raw.time_target_matched === true &&
       (selfEvent.test(quoted) || (nameKey(company).length >= 4 && nameKey(quoted).includes(nameKey(company))))) {
