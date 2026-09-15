@@ -158,6 +158,26 @@ test('a real self-post: a pronoun adjacent to a trimmed model quote still counts
   assert.equal(identity.status, 'matched');
   assert.equal(enrichCotContacts(withLead, identity).status, 'complete');
 });
+// 2026-09-16 (second pass): sole traders posting under their own account write in
+// first-person singular, never we/our/us -- a distinct gap from the paragraph-window
+// fix above, found in the same production audit.
+test('a real self-post: a sole trader writing in first-person singular still counts', () => {
+  const post = structuredClone(lead);
+  post.fetchResults.rawData.postText = "The secret is finally out \u2728\n\nI'm so excited to finally share it with you that i have moved into my own unit!!!!\n\nWelcome to my new chapter";
+  post.fetchResults.rawData.postAuthor = 'Bella Nails';
+  const withLead = { ...post, 'Company Name': 'Bella Nails' };
+  const identity = evaluateCotIdentity(withLead, { relationship: 'self', businessName: 'Bella Nails',
+    evidenceQuote: 'i have moved into my own unit' });
+  assert.equal(identity.status, 'matched');
+  assert.equal(enrichCotContacts(withLead, identity).status, 'complete');
+});
+
+test('a bare "I" with no verb form does not become pronoun evidence on its own', () => {
+  const post = structuredClone(lead);
+  post.fetchResults.rawData.postText = 'I think opening a new gym near here would be a great idea for someone.';
+  const identity = evaluateCotIdentity(post, { ...claim, evidenceQuote: post.fetchResults.rawData.postText });
+  assert.notEqual(identity.status, 'matched');
+});
 
 // Real production row, NOT fixed by this change -- documented rather than silently
 // dropped. "Beautiful New Premises with Car Park" sits two paragraphs after the quoted

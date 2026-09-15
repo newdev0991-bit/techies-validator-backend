@@ -5,7 +5,13 @@ const text = value => typeof value === 'string' ? value.trim() : '';
 const nameKey = value => text(value).normalize('NFKD').toLowerCase()
   .replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, ' ').trim();
 const referral = /\b(?:good luck to|shout[ -]?out to|visit our friends|check out (?:our friends|this business)|welcome (?:them|you) to)\b/i;
-const selfEvent = /\b(?:we(?:['’]re| are|['’]ve| have)?|our|us)\b[\s\S]{0,100}\b(?:open(?:ing|ed)?|mov(?:e|ed|ing)|relocat\w*|premises|management|ownership)\b/i;
+// 2026-09-16: a sole trader posting under their own name writes in the first-person
+// singular ("I've moved into my own unit", "I'm opening..."), never we/our/us. Found
+// in the same contact-yield audit as selfHandover/selfPremises: several genuine
+// self-posts sit in accounts with no business partner to make "we" natural. 'i' alone
+// (no apostrophe-s/space-am/etc.) is deliberately excluded from the pronoun group --
+// too common a capitalized word-start to gate on without the following verb forms.
+const selfEvent = /\b(?:we(?:['’]re| are|['’]ve| have)?|our|us|i(?:['’]m| am|['’]ve| have)|my|me)\b[\s\S]{0,100}\b(?:open(?:ing|ed)?|mov(?:e|ed|ing)|relocat\w*|premises|management|ownership)\b/i;
 // An ownership or management handover is inherently about the business it names, and is
 // written without a pronoun far more often than not. The surrounding checks still decide
 // whose business it is: the model must claim the event as its own and name this business,
