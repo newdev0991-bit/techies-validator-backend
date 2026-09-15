@@ -82,6 +82,48 @@ test('referrals and another tagged business override model self claims and publi
   }
 });
 
+// 2026-09-15: business identity and timestamp proof are separate questions. A page can
+// be independently confirmed as the right business, with a genuine self-event quote,
+// while Facebook's logged-out response for the exact submitted post simply has no dated
+// story node to read (target-not-in-public-sample / bounded-public-proof-read). That is
+// inconclusive, not contradictory -- it must not block contacts the way a wrong business
+// or a real conflicting date does.
+test('an unverifiable-but-not-contradicted timestamp still allows a matched self-post', () => {
+  const row = structuredClone(lead);
+  row.fetchResults.rawData.time_target_matched = false;
+  row.fetchResults.rawData.proofRetrieval = { status: 'unverified', reason: 'target-not-in-public-sample' };
+  const identity = evaluateCotIdentity(row, claim);
+  assert.equal(identity.status, 'matched');
+  assert.equal(identity.timestampVerified, false);
+  assert.equal(identity.requiresManualReview, false);
+  assert.equal(enrichCotContacts(row, identity).status, 'complete');
+
+  const bounded = structuredClone(row);
+  bounded.fetchResults.rawData.proofRetrieval.reason = 'bounded-public-proof-read';
+  assert.equal(evaluateCotIdentity(bounded, claim).status, 'matched');
+});
+
+test('a genuinely conflicting or unresolved timestamp still fails closed', () => {
+  const conflicted = structuredClone(lead);
+  conflicted.fetchResults.rawData.time_target_matched = false;
+  conflicted.fetchResults.rawData.proofRetrieval = { status: 'unverified', reason: 'target-date-conflict' };
+  assert.equal(evaluateCotIdentity(conflicted, claim).status, 'unresolved');
+
+  // No proofRetrieval reason at all (older/unknown failure shapes) must not be treated
+  // as inconclusive by default -- only the two named reasons above qualify.
+  const bare = structuredClone(lead);
+  bare.fetchResults.rawData.time_target_matched = false;
+  assert.equal(evaluateCotIdentity(bare, claim).status, 'unresolved');
+
+  // The third-party path must still win outright regardless of timestamp reason.
+  const thirdParty = structuredClone(lead);
+  thirdParty.fetchResults.rawData.postText = 'Good luck to Ed and Mollie with the new shop!';
+  thirdParty.fetchResults.rawData.time_target_matched = false;
+  thirdParty.fetchResults.rawData.proofRetrieval = { status: 'unverified', reason: 'target-not-in-public-sample' };
+  const identity = evaluateCotIdentity(thirdParty, { ...claim, evidenceQuote: thirdParty.fetchResults.rawData.postText });
+  assert.equal(identity.status, 'third_party');
+});
+
 test('an existing explicit lead retains compatibility when no referral evidence exists', () => {
   const existing = structuredClone(lead); delete existing['Search Post ID'];
   assert.equal(evaluateCotIdentity(existing).status, 'not_required');
