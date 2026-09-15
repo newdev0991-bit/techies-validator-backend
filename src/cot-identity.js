@@ -6,6 +6,21 @@ const nameKey = value => text(value).normalize('NFKD').toLowerCase()
   .replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, ' ').trim();
 const referral = /\b(?:good luck to|shout[ -]?out to|visit our friends|check out (?:our friends|this business)|welcome (?:them|you) to)\b/i;
 const selfEvent = /\b(?:we(?:['’]re| are|['’]ve| have)?|our|us)\b[\s\S]{0,100}\b(?:open(?:ing|ed)?|mov(?:e|ed|ing)|relocat\w*|premises|management|ownership)\b/i;
+// An ownership or management handover is inherently about the business it names, and is
+// written without a pronoun far more often than not. The surrounding checks still decide
+// whose business it is: the model must claim the event as its own and name this business,
+// and the publisher must match. This only stops a pronoun being load-bearing on its own.
+const selfHandover = /\bunder new (?:ownership|management)\b/i;
+// 2026-09-16: business bios routinely announce a move or a new location in pure third
+// person -- "Beautiful New Premises with Car Park", "Now at our new home" written as a
+// listing, never "we/our/us". Same reasoning as selfHandover: the surrounding checks
+// (name match, publisher match, page identity, model's own self claim) already decide
+// whose business this is; this only removes the pronoun as the sole way to say so.
+// 'home' deliberately excluded: 'new home' is generic enough that it appears in
+// otherwise-pronoun-dependent phrasing (see the 'short-quote expansion...' safety
+// test), so it isn't reliable pronoun-less evidence on its own the way 'premises' and
+// 'location' are.
+const selfPremises = /\bnew (?:premises|location)\b/i;
 
 // A matched publisher is not proof that the event concerns that publisher.
 // Model claims may narrow supplied evidence; they cannot create identity proof.
@@ -39,10 +54,40 @@ export function evaluateCotIdentity(lead = {}, claim = {}) {
   // it does not loosen anything else this branch already requires (the literal
   // quote, the self-event wording, the independent page-identity/scrape checks
   // below all still apply unchanged).
+  // 2026-09-16: the model's evidenceQuote is often a paraphrase that trims the exact
+  // pronoun out -- e.g. it quotes "Apex has moved to Jungle Gym Salhouse" from a caption
+  // that actually reads "...a move to new premises! We're excited to share that Apex has
+  // moved...". Testing the wording patterns against `quoted` alone was failing genuine
+  // self-posts at scale (the single largest bucket in the 2026-09-16 contact-yield audit:
+  // identity stuck 'unresolved' despite a matched Page, matched publisher and a 'self'
+  // model claim, on ~66% of all contacts.unavailable leads).
+  // The context must stay bounded to the quote's own paragraph plus one paragraph either
+  // side -- the same adjacency `identityProofQuote` (actor/src/contactTarget.js) already
+  // uses for short-quote expansion -- not an arbitrary character count. A wider blind
+  // window (tried first, reverted) let a self-event phrase two paragraphs away, separated
+  // by genuinely unrelated text, get credited to a quote it has nothing to do with; the
+  // 'short-quote expansion cannot manufacture identity from unrelated or unsafe context'
+  // test exists precisely to catch that. thirdParty above already scans the *entire*
+  // caption independently and takes priority, so this bounded widening still cannot let a
+  // real third-party post through.
+  // Crossing into a *different* paragraph than the quote turned out unsafe even one
+  // paragraph over: "We are opening a new place for Somebody Else." sitting right after
+  // the quote's own paragraph would otherwise read as self-event wording for a business
+  // it explicitly isn't about, and there is no cheap, reliable way to tell that apart
+  // from a genuine continuation like Apex's. Staying inside the quote's own paragraph
+  // still fixes the dominant real pattern (a trimmed quote with its pronoun a few words
+  // away in the *same* paragraph/sentence, e.g. Apex Injury Clinic: "...a move to new
+  // premises! We're excited to share that Apex has moved...") without ever reasoning
+  // about content outside what the model actually quoted from.
+  const paragraphs = quotePresent ? [...caption.matchAll(/[^\r\n]+(?:\r?\n(?!\s*\r?\n)[^\r\n]+)*/g)] : [];
+  const quoteStart = quotePresent ? caption.indexOf(quoted) : -1;
+  const ownParagraph = paragraphs.find(p => p.index <= quoteStart && p.index + p[0].length >= quoteStart + quoted.length);
+  const quoteContext = ownParagraph && ownParagraph[0].length <= 500 ? ownParagraph[0] : quoted;
   const selfMatchCore = imported && nameKey(company) && nameKey(publisher) && quotePresent && claim?.relationship === 'self' &&
       (looseNameKey(businessName) === looseNameKey(company) || sameVerifiedBusiness(raw, businessName)) && looseNameKey(publisher) === looseNameKey(company) &&
       raw.business?.identityStatus === 'matched' && raw.scrape?.success === true &&
-      (selfEvent.test(quoted) || (nameKey(company).length >= 4 && nameKey(quoted).includes(nameKey(company))));
+      (selfEvent.test(quoteContext) || selfHandover.test(quoteContext) || selfPremises.test(quoteContext) ||
+        (nameKey(company).length >= 4 && nameKey(quoted).includes(nameKey(company))));
   // 2026-09-15: business identity ("is this the right business?") and timestamp proof
   // ("did we independently verify exactly when this post went up?") are separate
   // questions. Facebook's logged-out response for the exact submitted post sometimes

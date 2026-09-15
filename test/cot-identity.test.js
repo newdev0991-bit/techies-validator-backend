@@ -124,6 +124,68 @@ test('a genuinely conflicting or unresolved timestamp still fails closed', () =>
   assert.equal(identity.status, 'third_party');
 });
 
+// 2026-09-16: the model's evidenceQuote is often a trimmed paraphrase that drops the
+// pronoun next to it in the actual caption -- the single largest bucket in the
+// contact-yield audit (~66% of all contacts.unavailable leads) was a matched Page,
+// matched publisher, 'self' model claim, that still fell to 'unresolved' because the
+// self-event wording check only looked at that trimmed quote.
+test('an ownership or management change is a self-event even without a pronoun', () => {
+  for (const text of ['Belmont House is under new ownership.', 'Croft House, under new management from Monday.']) {
+    const post = structuredClone(lead);
+    post.fetchResults.rawData.postText = text;
+    const identity = evaluateCotIdentity(post, { ...claim, evidenceQuote: text });
+    assert.equal(identity.status, 'matched', `expected matched for ${JSON.stringify(text)}`);
+  }
+});
+
+test('a pronoun-less event still fails when the model does not claim it as its own', () => {
+  const text = 'The Old Mill is under new ownership.';
+  const post = structuredClone(lead);
+  post.fetchResults.rawData.postText = text;
+  for (const invalid of [{ ...claim, relationship: 'third_party', evidenceQuote: text },
+    { ...claim, businessName: 'The Old Mill', evidenceQuote: text }]) {
+    assert.notEqual(evaluateCotIdentity(post, invalid).status, 'matched');
+  }
+});
+
+test('a real self-post: a pronoun adjacent to a trimmed model quote still counts (Apex Injury Clinic shape)', () => {
+  const post = structuredClone(lead);
+  post.fetchResults.rawData.postText = "It's amazing to see how much we've grown since opening. And what better way to celebrate than a move to new premises! We're excited to share that Apex has moved to Jungle Gym Salhouse!";
+  post.fetchResults.rawData.postAuthor = 'Apex Injury Clinic';
+  const withLead = { ...post, 'Company Name': 'Apex Injury Clinic' };
+  const identity = evaluateCotIdentity(withLead, { relationship: 'self', businessName: 'Apex Injury Clinic',
+    evidenceQuote: 'Apex has moved to Jungle Gym Salhouse' });
+  assert.equal(identity.status, 'matched');
+  assert.equal(enrichCotContacts(withLead, identity).status, 'complete');
+});
+
+// Real production row, NOT fixed by this change -- documented rather than silently
+// dropped. "Beautiful New Premises with Car Park" sits two paragraphs after the quoted
+// text ("Principal: Lynette House" and a class list come between), so the paragraph-
+// bounded context (mirroring identityProofQuote's own index-1/index/index+1 adjacency)
+// correctly does not reach it -- the same bound that keeps
+// 'short-quote expansion cannot manufacture identity from unrelated or unsafe context'
+// passing. A wider reach that did catch this shape reached equally far into genuinely
+// unrelated content in that other test; there is no text-only signal here to tell "later
+// paragraph, same coherent post" apart from "later paragraph, unrelated interruption".
+// Left unresolved (routes to manual review) rather than risk the unrelated-content case.
+test('a pronoun-less bio-style announcement several paragraphs from the quote stays unresolved (Olney School of Dancing shape)', () => {
+  const post = structuredClone(lead);
+  post.fetchResults.rawData.postText = "Olney's Longest-Established Dance School\n\nPrincipal: Lynette House\n\nBeautiful New Premises with Car Park\nat Olney Community Centre";
+  post.fetchResults.rawData.postAuthor = 'Olney School of Dancing';
+  const withLead = { ...post, 'Company Name': 'Olney School of Dancing' };
+  const identity = evaluateCotIdentity(withLead, { relationship: 'self', businessName: 'Olney School of Dancing',
+    evidenceQuote: "Olney's Longest-Established Dance School" });
+  assert.equal(identity.status, 'unresolved');
+});
+
+test('the widened wording window still fails closed on a third-party post naming a distant, unrelated pronoun', () => {
+  const post = structuredClone(lead);
+  post.fetchResults.rawData.postText = 'We had a great night out! Good luck to Ed and Mollie with the new shop!';
+  const identity = evaluateCotIdentity(post, { ...claim, evidenceQuote: 'Good luck to Ed and Mollie with the new shop!' });
+  assert.equal(identity.status, 'third_party');
+});
+
 test('an existing explicit lead retains compatibility when no referral evidence exists', () => {
   const existing = structuredClone(lead); delete existing['Search Post ID'];
   assert.equal(evaluateCotIdentity(existing).status, 'not_required');
