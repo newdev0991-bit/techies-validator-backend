@@ -822,11 +822,8 @@ async function runFacebookActorBatch(rows, phase = 'proof') {
     max: 3_650
   });
   const maxPosts = parsePositiveNumber(process.env.APIFY_MAX_POSTS, 10, { min: 1, max: 20 });
-  const waitSecs = Math.round(parsePositiveNumber(
-    process.env.APIFY_BATCH_WAIT_SECS || process.env.APIFY_WAIT_SECS,
-    300,
-    { min: 10, max: 300 }
-  ));
+  const phaseOptions = cotActorPhaseOptions(phase);
+  const waitSecs = cotBatchWaitSecs(phaseOptions.timeout);
   const actorInput = buildCotActorInput(entries, {
     phase,
     activityWindowDays,
@@ -837,7 +834,7 @@ async function runFacebookActorBatch(rows, phase = 'proof') {
   console.log(`[facebook-actor-batch] Starting ${actorId} for ${entries.length} row(s).`);
   // SDK call() otherwise waits for streamedLog.stop() even after the run finishes.
   // A stalled log stream must never block retrieving the completed dataset.
-  const run = await client.actor(actorId).call(actorInput, { waitSecs, build: APIFY_ACTOR_BUILD, log: null, ...cotActorPhaseOptions(phase) });
+  const run = await client.actor(actorId).call(actorInput, { waitSecs, build: APIFY_ACTOR_BUILD, log: null, ...phaseOptions });
   console.log(`[facebook-actor-batch] ${phase} run ${run?.id}: ${run?.status}.`);
   const runStatus = typeof run?.status === 'string' ? run.status.toUpperCase() : '';
   if (['READY', 'RUNNING'].includes(runStatus)) {
@@ -948,6 +945,22 @@ function cotBatchDeadlineMs() {
 // seconds, and skipped the designed slow-run path entirely: call() is supposed
 // to return a READY/RUNNING run after waitSecs, which becomes a 504 APIFY_TIMEOUT
 // that names what happened. waitSecs must bound the wait; the transport must not.
+// How long a batch waits on one phase's Actor run. The run carries its own Apify
+// timeout (cotActorPhaseOptions: proof 120s, contacts 180s), so waiting longer than
+// that always yields a terminal status. Waiting less returns a still-RUNNING run,
+// which becomes a 504 APIFY_TIMEOUT that throws away paid work and halts the lead
+// pipeline: production ran with a 60s wait, proof runs of 64s and 68s on 2026-09-14
+// SUCCEEDED after the batch had already failed, and the pipeline stayed halted ~20h.
+// The env value may lengthen the wait, never shorten it below the run's timeout.
+export function cotBatchWaitSecs(actorTimeoutSecs, env = process.env) {
+  const configured = Math.round(parsePositiveNumber(
+    env.APIFY_BATCH_WAIT_SECS || env.APIFY_WAIT_SECS,
+    300,
+    { min: 10, max: 300 }
+  ));
+  return Math.max(configured, actorTimeoutSecs + 30);
+}
+
 export function apifyRequestTimeoutSecs() {
   return parsePositiveNumber(process.env.APIFY_REQUEST_TIMEOUT_SECS, 120, {
     min: APIFY_MAX_WAIT_FOR_FINISH_SECS + 1,
