@@ -42,13 +42,18 @@ test('maps verified contacts and exact viewer headers, preserving IDs and stable
   assert.deepEqual(deliveryPlan(s,config,NOW+100).entries,p.entries);
   assert.deepEqual(s.snapshot(),before);
 });
-test('expired, rejected, ambiguous identity, and missing verified contacts never deliver',t=>{
+test('expired, rejected, ambiguous identity, and an unverified phone never deliver',t=>{
   assert.equal(deliveryPlan(fixture(t),config,NOW+86400000).counts.ready,0);
   for (const mutate of [r=>r.analysis.verdict='BAD',r=>r.analysis.needs_manual_review=true,
-    r=>r.analysis.business_identity.relationship='third_party',r=>r.fetchResults.rawData.contact.phoneVerified=false,
-    r=>r.fetchResults.rawData.address.verified=false]) {
+    r=>r.analysis.business_identity.relationship='third_party',r=>r.fetchResults.rawData.contact.phoneVerified=false]) {
     assert.equal(deliveryPlan(fixture(t,mutate),config,NOW).counts.ready,0);
   }
+});
+// A verified phone is enough to deliver even without a verified address -- requiring
+// both punished leads whose business page never lists a full postal address.
+test('a verified phone with no verified address still delivers',t=>{
+  const s=fixture(t,r=>r.fetchResults.rawData.address.verified=false);
+  assert.equal(deliveryPlan(s,config,NOW).counts.ready,1);
 });
 test('checkpoint before send; successful receipt survives restore without redelivery',async t=>{
   const s=fixture(t);let durable,calls=0;

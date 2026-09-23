@@ -272,11 +272,13 @@ test('a stored REPEATED_INCOMPLETE_SEARCHES halt converts to search backoff and 
   assert.equal((await f.runner.tick()).status,'search_ingested');assert.equal((await f.runner.tick()).status,'validated');
   assert.equal((await f.runner.tick()).status,'cycle_complete');assert.equal(f.s.get('incompleteSearches'),0);
 });
-test('unverified contact or search-only date never enters enriched CSV; exports age out stale proofs',async t=>{
+test('unverified date never enters enriched CSV; a verified phone with an unverified address still does; exports age out stale proofs',async t=>{
   const f=fixture(t,[post('1'),post('2'),post('3')]);await ingest(f);
   f.p.validate=async payload=>response(payload,r=>{if(r.rowIndex===1)delete r.fetchResults.rawData.address.verified;if(r.rowIndex===2)delete r.fetchResults.rawData.posted_at_iso;});
   await f.runner.tick();let status=JSON.parse(readFileSync(path.join(f.c.outputDir,'status.json')));
-  assert.deepEqual(status.counts,{enriched:1,review:2,rejected:0,expired:0});
+  // rowIndex 1 keeps its verified phone, so a missing/unverified address alone no longer
+  // withholds it from delivery -- only rowIndex 2's unresolvable date does.
+  assert.deepEqual(status.counts,{enriched:2,review:1,rejected:0,expired:0});
   f.advance(86400000);status=await exportFiles(f.s,f.c.outputDir,f.now());assert.equal(status.counts.enriched,0);
   assert.equal(f.calls.validate,0); // replaced provider above; export must not invoke it
 });

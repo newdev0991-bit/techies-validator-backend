@@ -125,7 +125,19 @@ export function enrichCotContacts(lead = {}, businessIdentity) {
     value => text(value).toUpperCase().replace(/\s+/g, ''));
   const fields = [phone, fullAddress, postcodeField];
   const conflicts = fields.some(item => item.conflict);
-  const complete = Boolean(phone.value && fullAddress.value);
+  // A phone number already present on the submitted lead (even if the scraper
+  // couldn't independently re-verify it) is enough contact info to proceed --
+  // it shouldn't gate a lead into manual review just because no address could
+  // be verified too. Independent verification still governs `phone.value`
+  // itself (what gets promoted/exported); this only affects the review gate.
+  // Exception: a submitted phone that was only auto-copied from an unverified
+  // search-author contact (searchAuthor.verified is always false) must not
+  // count -- that number was never actually submitted for this lead, it was
+  // speculatively carried over from the post author during search ingestion.
+  const submittedFromUnverifiedSearchAuthor = Boolean(searchAuthor?.phone) && Boolean(submitted.phone)
+    && normalizeUkContactPhone(submitted.phone) === normalizeUkContactPhone(searchAuthor.phone);
+  const phoneKnown = Boolean(phone.value || (phone.submittedValue && !submittedFromUnverifiedSearchAuthor));
+  const complete = phoneKnown;
   return {
     schemaVersion: 'cot-contact-enrichment-v1',
     searchAuthor,
@@ -134,11 +146,11 @@ export function enrichCotContacts(lead = {}, businessIdentity) {
     status: conflicts ? 'review_required' : complete ? 'complete' : fields.some(item => item.value) ? 'partial' : 'unavailable',
     phone, address: fullAddress, postcode: postcodeField,
     requiresManualReview: conflicts || !complete,
-    reviewReasons: [...(!phone.value ? ['PHONE_MISSING'] : []), ...(businessIdentity?.requiresManualReview ? ['IDENTITY_UNRESOLVED'] : []), ...(conflicts ? ['CONTACT_CONFLICT'] : [])],
+    reviewReasons: [...(!phoneKnown ? ['PHONE_MISSING'] : []), ...(businessIdentity?.requiresManualReview ? ['IDENTITY_UNRESOLVED'] : []), ...(conflicts ? ['CONTACT_CONFLICT'] : [])],
     warnings: [
       ...(businessIdentity?.requiresManualReview ? [businessIdentity.reason] : []),
       ...(!sameRow ? ['Contact evidence is missing or belongs to a different proof URL.'] : []),
-      ...(!phone.value ? ['No verified UK business phone was found.'] : []),
+      ...(!phoneKnown ? ['No verified UK business phone was found.'] : []),
       ...(!fullAddress.value ? ['No verified business address was found.'] : []),
       ...(conflicts ? ['Contact sources disagree or differ from the submitted lead; review before export.'] : [])
     ]

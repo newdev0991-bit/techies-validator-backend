@@ -122,8 +122,8 @@ test('a stale good lead is still given its contact lookup, because age is priori
   assert.equal(result.analysis.contact_enrichment.phone.value, '01632960123');
 });
 
-test('missing address, wrong target binding and publisher contacts can never make a good opportunity READY', async () => {
-  for (const mutate of [raw => { raw.address.full = ''; }, raw => { raw.contactTarget.businessName = 'Wrong business'; },
+test('wrong target binding and publisher contacts can never make a good opportunity READY', async () => {
+  for (const mutate of [raw => { raw.contactTarget.businessName = 'Wrong business'; },
     raw => { raw.contact.sourceUrl = raw.facebookEvidenceUrl + '/about'; },
     raw => { raw.postText = 'The opening has been cancelled.'; }]) {
     const row = fixture();
@@ -132,6 +132,19 @@ test('missing address, wrong target binding and publisher contacts can never mak
     } });
     assert.equal(assess(result, Date.now()).status, 'REVIEW_REQUIRED');
   }
+});
+
+// A verified phone is enough to proceed without an address on file -- requiring
+// both punished the common case of a lead whose business page never lists a
+// full postal address, even though the phone alone is enough to make contact.
+test('a verified phone with no address still reaches READY', async () => {
+  const row = fixture();
+  const [result] = await runGoodLeadContactPhase([row], { finalize: finalizeCotAnalysis, scrape: async () => {
+    const fetched = contacts(row); fetched.rawData.address.full = ''; return [fetched];
+  } });
+  assert.equal(assess(result, Date.now()).status, 'READY');
+  assert.equal(result.analysis.contact_enrichment.address.value, '');
+  assert.equal(result.analysis.contact_enrichment.phone.value, '01632960123');
 });
 
 test('uncertain contact-run failure and mismatched rows settle in review without provider retry', async () => {
@@ -173,7 +186,7 @@ test('short self quote recovers existing verified contacts without a paid call a
   for (const [change, expected] of [
     [r => { r.analysis.quality_assessment.verdict = 'BAD'; }, 'REJECTED'],
     [r => { r.analysis.quality_assessment.needs_manual_review = true; }, 'REVIEW_REQUIRED'],
-    [r => { r.fetchResults.rawData.address.full = ''; }, 'REVIEW_REQUIRED'],
+    [r => { r.fetchResults.rawData.address.full = ''; }, 'READY'],
     [r => { r.fetchResults.rawData.address.conflict = true; }, 'REVIEW_REQUIRED'],
     [r => { r.fetchResults.rawData.posted_at_iso = new Date(Date.now() - 25 * 3600000).toISOString(); }, 'EXPIRED'],
   ]) {
