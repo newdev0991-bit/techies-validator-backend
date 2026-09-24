@@ -657,7 +657,32 @@ export function evaluateLeadFreshness(
     });
   }
 
-  if (!specs.some(spec => spec.sourceType === 'scraper')) {
+  // Facebook Keyword Search export: the post's own server creation time, emitted in
+  // the same record as its URL and post ID. Only an exact ISO instant with a post ID
+  // counts; anything else is ignored rather than guessed at.
+  const searchPostId = firstDefined(
+    safeLead['Search Post ID'], safeLead['Post ID'], safeLead.post_id, safeLead.postId
+  );
+  const searchPostedAt = firstDefined(
+    safeLead['Search Posted At'], safeLead['Posted At'], safeLead.posted_at, safeLead.postedAt,
+    safeLead['Post Timestamp'], safeLead['Post Time']
+  );
+  const searchInstant = typeof searchPostedAt === 'string' &&
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})$/.test(searchPostedAt.trim()) &&
+    Number.isFinite(Date.parse(searchPostedAt));
+  if (searchInstant && String(searchPostId || '').trim()) {
+    specs.push({
+      id: 'search_server_timestamp',
+      label: 'Facebook search post time',
+      value: new Date(searchPostedAt).toISOString(),
+      sourceType: 'search',
+      provenance: 'facebook_search.creation_time',
+      confidence: 90,
+      dateOrder: 'DMY'
+    });
+  }
+
+  if (!specs.some(spec => spec.sourceType === 'scraper' || spec.sourceType === 'search')) {
     const pageActivityDate = firstDefined(rawData?.activity?.latestPostDate, rawData.latestPostDate);
     if (pageActivityDate !== undefined) {
       specs.push({
@@ -710,15 +735,17 @@ export function evaluateLeadFreshness(
       trust.explicitlyTrusted &&
       parsed.precision === 'instant' &&
       parsed.parser === 'iso';
+    const exactSearchEvidence = spec.id === 'search_server_timestamp' &&
+      parsed.precision === 'instant' && parsed.parser === 'iso';
     return {
       ...spec,
       ...parsed,
       trusted: spec.sourceType === 'lead' || !scraperUntrusted,
       confidence: scraperUntrusted ? Math.min(evidenceConfidence, 35) : evidenceConfidence,
-      decisionGrade: exactMachineEvidence && !scraperUntrusted,
+      decisionGrade: (exactMachineEvidence && !scraperUntrusted) || exactSearchEvidence,
       estimated: spec.sourceType === 'scraper'
         ? trust.actorEstimated !== false || companionIndicatesEstimate || !exactMachineEvidence
-        : true
+        : !exactSearchEvidence
     };
   });
 

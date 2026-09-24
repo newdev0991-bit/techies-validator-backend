@@ -599,3 +599,22 @@ test('a content rejection is not sent to timestamp review', () => {
   // A possible lead with the same untrusted timestamp still goes to review.
   assert.equal(applyFreshnessPolicy({ ...aiResponse(), verdict: 'GOOD' }, unresolved).needs_manual_review, true);
 });
+
+test('an exact Facebook search post time replaces untrusted page activity', () => {
+  const now = new Date('2026-09-24T09:00:00.000Z');
+  const base = { 'Company Name': 'Ana’s Kebab Telford', 'Lead Proof URL': DIRECT_POST_URL,
+    fetchResults: { rawData: { activity: { latestPostDate: '2026-09-23T13:05:22.000Z' } } } };
+  const without = evaluateLeadFreshness(base, { now });
+  assert.equal(without.reasonCode, 'UNTRUSTED_PROVENANCE');
+
+  const fresh = evaluateLeadFreshness({ ...base, 'Search Post ID': '123', 'Search Posted At': '2026-09-23T13:05:22.000Z' }, { now });
+  assert.equal(fresh.reasonCode, 'FRESH');
+  assert.equal(fresh.requiresManualReview, false);
+
+  const stale = evaluateLeadFreshness({ ...base, 'Search Post ID': '123', 'Search Posted At': '2026-09-20T10:00:00Z' }, { now });
+  assert.equal(stale.reasonCode, 'STALE');
+
+  // No post ID, or a date without a time, is not trusted.
+  assert.equal(evaluateLeadFreshness({ ...base, 'Search Posted At': '2026-09-23T13:05:22Z' }, { now }).reasonCode, 'UNTRUSTED_PROVENANCE');
+  assert.equal(evaluateLeadFreshness({ ...base, 'Search Post ID': '123', 'Search Posted At': '23/09/2026' }, { now }).reasonCode, 'UNTRUSTED_PROVENANCE');
+});

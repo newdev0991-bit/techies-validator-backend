@@ -273,7 +273,8 @@ test('a stored REPEATED_INCOMPLETE_SEARCHES halt converts to search backoff and 
   assert.equal((await f.runner.tick()).status,'cycle_complete');assert.equal(f.s.get('incompleteSearches'),0);
 });
 test('unverified date never enters enriched CSV; a verified phone with an unverified address still does; exports age out stale proofs',async t=>{
-  const f=fixture(t,[post('1'),post('2'),post('3')]);await ingest(f);
+  // rowIndex 2 (post 3) has no search post time either (an exact search time is trusted evidence now).
+  const f=fixture(t,[post('1'),post('2'),{...post('3'),posted_at:''}]);await ingest(f);
   f.p.validate=async payload=>response(payload,r=>{if(r.rowIndex===1)delete r.fetchResults.rawData.address.verified;if(r.rowIndex===2)delete r.fetchResults.rawData.posted_at_iso;});
   await f.runner.tick();let status=JSON.parse(readFileSync(path.join(f.c.outputDir,'status.json')));
   // rowIndex 1 keeps its verified phone, so a missing/unverified address alone no longer
