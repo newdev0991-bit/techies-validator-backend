@@ -131,6 +131,10 @@ export function evaluateCotIdentity(lead = {}, claim = {}) {
 
 export function applyCotIdentityPolicy(analysis, identity) {
   if (!identity.requiresManualReview) return { ...analysis, business_identity: identity };
+  // Rejected on content (not a lead): who posted it cannot make it one, so no review.
+  if (['BAD', 'NOT_A_LEAD'].includes(String(analysis.verdict || '').toUpperCase())) {
+    return { ...analysis, business_identity: identity, needs_manual_review: false };
+  }
   // A proof that promotes a *different* business (third_party) cannot have its
   // publisher's contacts attributed to that business, so a GOOD verdict there is
   // downgraded to UNCLEAR. An unresolved own-business identity is different: it is

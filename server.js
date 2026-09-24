@@ -678,7 +678,10 @@ export function finalizeCotAnalysis(lead, aiResponse) {
       : null,
     apify_scraping_success: isSuccessfulFacebookScrape(scrapedResult),
     posted_at: freshnessData.timestamp,
-    needs_manual_review: aiResponse.needs_manual_review === true || freshnessData.requiresManualReview || businessIdentity.requiresManualReview || finalContacts.requiresManualReview
+    // A content rejection (BAD / NOT_A_LEAD) is final: timestamp, identity and
+    // contact gaps only matter for leads we might deliver.
+    needs_manual_review: toContractVerdict(policyResponse.verdict) === 'BAD' ? false
+      : aiResponse.needs_manual_review === true || freshnessData.requiresManualReview || businessIdentity.requiresManualReview || finalContacts.requiresManualReview
   };
 }
 

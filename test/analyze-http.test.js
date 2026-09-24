@@ -103,8 +103,9 @@ test('HTTP analyze preserves legacy envelope and enforces reconciled freshness p
   assert.ok(Array.isArray(legacyEnvelope.content));
   assert.equal(typeof legacyEnvelope.content[0].text, 'string');
   const genesis = JSON.parse(legacyEnvelope.content[0].text);
-  assert.equal(genesis.verdict, 'UNCLEAR');
-  assert.equal(genesis.needs_manual_review, true);
+  // 2026-09-24: a content rejection is not sent to timestamp review.
+  assert.equal(genesis.verdict, 'BAD');
+  assert.equal(genesis.needs_manual_review, false);
   assert.equal(genesis.posted_at, null);
   assert.equal(genesis.freshness.reasonCode, 'DATE_CONFLICT');
   assert.equal(genesis.freshness.autoRejectEligible, false);

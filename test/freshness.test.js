@@ -179,7 +179,11 @@ test('Genesis Cannock conflicting group-feed evidence can never auto-reject', ()
     '2026-08-03T23:00:00.000Z'
   );
 
-  const enriched = applyFreshnessPolicy(aiResponse({ verdict: 'BAD' }), result);
+  // A content rejection stays BAD; the date conflict can't make it a lead.
+  const rejected = applyFreshnessPolicy(aiResponse({ verdict: 'BAD' }), result);
+  assert.equal(rejected.verdict, 'BAD');
+  assert.equal(rejected.needs_manual_review, false);
+  const enriched = applyFreshnessPolicy(aiResponse({ verdict: 'GOOD' }), result);
   assert.equal(enriched.verdict, 'UNCLEAR');
   assert.equal(enriched.needs_manual_review, true);
   assert.match(enriched.reasoning, /^\[MANUAL REVIEW REQUIRED:/);
@@ -580,4 +584,18 @@ test('Yesterday is parsed against the UK scrape date but never treated as exact'
   assert.equal(result.decision, 'manual_review');
   assert.equal(result.reasonCode, 'IMPRECISE_DATE');
   assert.equal(result.autoRejectEligible, false);
+});
+
+test('a content rejection is not sent to timestamp review', () => {
+  const unresolved = evaluateLeadFreshness(
+    { 'Lead Proof URL': DIRECT_POST_URL, fetchResults: { rawData: {} } },
+    { now: new Date('2026-08-06T04:00:00.000Z') }
+  );
+  for (const verdict of ['BAD', 'NOT_A_LEAD']) {
+    const applied = applyFreshnessPolicy({ ...aiResponse(), verdict }, unresolved);
+    assert.equal(applied.verdict, verdict);
+    assert.equal(applied.needs_manual_review, false);
+  }
+  // A possible lead with the same untrusted timestamp still goes to review.
+  assert.equal(applyFreshnessPolicy({ ...aiResponse(), verdict: 'GOOD' }, unresolved).needs_manual_review, true);
 });

@@ -931,6 +931,20 @@ export function applyFreshnessPolicy(aiResponse, freshness) {
     };
   }
 
+  // A post that is not a lead (BAD / NOT_A_LEAD) is rejected on its content; when
+  // it was posted cannot change that. Sending it to timestamp review only filled
+  // the review queue with schools, promotions and service updates (2026-09-24 run:
+  // 26 of 39 rows in review, most of them UNTRUSTED_PROVENANCE non-leads).
+  const rejectedOnContent = ['BAD', 'NOT_A_LEAD'].includes(String(response.verdict || '').toUpperCase());
+  if (freshness.requiresManualReview && rejectedOnContent) {
+    return {
+      ...response,
+      reasoning,
+      red_flags: redFlags,
+      needs_manual_review: false
+    };
+  }
+
   if (freshness.requiresManualReview) {
     const reviewReason = freshness.manualReviewReason || 'Freshness could not be determined safely.';
     const warningMessages = freshness.warnings.map(item => item.message);
