@@ -119,6 +119,9 @@ async function main() {
     const name = `rules + ${models.join(' -> ')}`;
     const items = await runConfig(data, models, Number(opt('concurrency')) || 3);
     report.results[name] = score(items);
+    report.rows = report.rows || {};
+    report.rows[name] = items.map(i => ({ company: i.lead['Company Name'], v1: i.v1, pred: i.pred, event: i.event,
+      stage1: i.stage1Reasons, steps: i.steps, cost: i.cost }));
     detail[name] = items.filter(i => (i.label === 'GOOD' && i.pred === 'FAIL') || (i.label === 'BAD' && i.pred === 'PASS'))
       .map(i => ({ company: i.lead['Company Name'], label: i.label, pred: i.pred, event: i.event, stage1: i.stage1Reasons,
         caption: captionOf(i.lead).slice(0, 200) }));
@@ -128,4 +131,4 @@ async function main() {
   if (opt('out')) await writeFile(opt('out'), JSON.stringify(report, null, 2));
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) main().catch(e => { console.error(e); process.exit(1); });
+if (process.argv[1] && import.meta.url === (await import('node:url')).pathToFileURL(process.argv[1]).href) main().catch(e => { console.error(e); process.exit(1); });
