@@ -37,3 +37,5 @@ pipeline/.env
 pipeline/canary-data/
 pipeline/canary-output/
 pipeline/cloud-migration/
+data/*
+!data/benchmark-template.csv

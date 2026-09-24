@@ -95,3 +95,11 @@ test('the revised spec verdicts survive normalisation, and junk still falls back
   assert.equal(normalizeAiResponse({ verdict: 'not_a_lead', reasoning: 'r' }).verdict, 'NOT_A_LEAD');
   assert.equal(normalizeAiResponse({ verdict: 'PROBABLY', reasoning: 'r' }).verdict, 'UNCLEAR');
 });
+
+test('contract verdict maps MAYBE to UNCLEAR and NOT_A_LEAD to BAD', async () => {
+  const { toContractVerdict } = await import('../src/validation.js');
+  assert.equal(toContractVerdict('MAYBE'), 'UNCLEAR');
+  assert.equal(toContractVerdict('NOT_A_LEAD'), 'BAD');
+  assert.equal(toContractVerdict('good'), 'GOOD');
+  assert.equal(toContractVerdict(undefined), 'UNCLEAR');
+});

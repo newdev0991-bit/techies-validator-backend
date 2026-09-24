@@ -1,4 +1,4 @@
-import { validateFacebookUrl } from '../src/validation.js';
+import { validateFacebookUrl, toContractVerdict } from '../src/validation.js';
 import { enrichCotContacts } from '../src/cot-contacts.js';
 import { evaluateLeadFreshness } from '../src/freshness.js';
 import { evaluateCotIdentity } from '../src/cot-identity.js';
@@ -32,7 +32,7 @@ export function validateResponse(payload, expected) {
     const e = expected.leads[i];
     if (r?.success !== true || r.clientRowId !== e.clientRowId || r.rowIndex !== e.rowIndex
         || !r.analysis || r.analysis.contact_enrichment?.schemaVersion !== 'cot-contact-enrichment-v1'
-        || !['GOOD','BAD','UNCLEAR'].includes(r.analysis.verdict)
+        || !['GOOD','BAD','UNCLEAR','MAYBE','NOT_A_LEAD'].includes(r.analysis.verdict)
         || !r.lead || Object.keys(e.lead).some(k => e.lead[k] !== r.lead[k])) throw new Error('BATCH_CONTRACT_MISMATCH');
     return r;
   });
@@ -52,12 +52,17 @@ export function assess(row, now) {
   const freshness = evaluateLeadFreshness(lead, { now: new Date(now) });
   const event = qualifySearchPost({ message: lead.fetchResults?.rawData?.postText });
   const excludedEvent = ['historical_event_only', 'personal_or_employment_move', 'recruitment_only'].includes(event.reason);
-  const qualityVerdict = excludedEvent ? 'BAD' : quality.verdict;
+  const qualityVerdict = excludedEvent ? 'BAD' : toContractVerdict(quality.verdict);
+  // Spec D1 (resolved 2026-09-24): age never decides the OPPORTUNITY verdict
+  // (prompt + applyFreshnessPolicy), but it does gate DELIVERY: a stale proof is
+  // EXPIRED, not READY. FRESHNESS_GATE=off delivers stale leads at low priority.
+  const gate = !/^(?:off|false|0|no)$/i.test(String(process.env.FRESHNESS_GATE || ''));
   const ready = !excludedEvent && qualityVerdict === 'GOOD' && quality.needs_manual_review === false
-    && freshness.decision === 'fresh' && !freshness.requiresManualReview
+    && (!gate || freshness.decision === 'fresh') && !freshness.requiresManualReview
     && contacts.status === 'complete' && !contacts.requiresManualReview && !identity.requiresManualReview;
-  return { status: qualityVerdict === 'BAD' ? 'REJECTED' : freshness.autoRejectEligible ? 'EXPIRED' : ready ? 'READY' : 'REVIEW_REQUIRED',
-    contacts, freshness, identity, verdict: qualityVerdict, qualityVerdict,
+  return { status: qualityVerdict === 'BAD' ? 'REJECTED' : gate && freshness.autoRejectEligible ? 'EXPIRED' : ready ? 'READY' : 'REVIEW_REQUIRED',
+    contacts, freshness, identity, verdict: qualityVerdict,
+    priority: freshness.decision === 'fresh' ? 'high' : 'low', qualityVerdict,
     reason: `${excludedEvent ? `Event excluded: ${event.reason}. ` : ''}${quality.reasoning || analysis.reasoning || ''} [Freshness: ${freshness.reasonCode}; contacts: ${contacts.status}; business identity: ${identity.status}]`,
     validatedAt: new Date(now).toISOString(), response: row };
 }

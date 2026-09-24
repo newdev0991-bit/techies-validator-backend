@@ -79,6 +79,15 @@ export class InvalidProviderResponseError extends Error {
 }
 
 /** Normalize and validate the OpenAI JSON response before it reaches clients. */
+// Owner decision 2026-09-24: the delivery contract has three verdicts.
+// MAYBE (plausible but incomplete) -> UNCLEAR; NOT_A_LEAD (no premises event) -> BAD.
+export function toContractVerdict(verdict) {
+  const v = String(verdict || '').toUpperCase();
+  if (v === 'MAYBE') return 'UNCLEAR';
+  if (v === 'NOT_A_LEAD') return 'BAD';
+  return ['GOOD', 'BAD', 'UNCLEAR'].includes(v) ? v : 'UNCLEAR';
+}
+
 export function normalizeAiResponse(value) {
   if (!isPlainObject(value)) {
     throw new InvalidProviderResponseError('OpenAI response must be a JSON object.');

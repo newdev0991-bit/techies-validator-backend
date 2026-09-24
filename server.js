@@ -32,6 +32,7 @@ import { cotActorPhaseOptions } from './src/pipeline-capabilities.js';
 import { evaluateCotIdentity, applyCotIdentityPolicy } from './src/cot-identity.js';
 import { qualifySearchPost } from './src/cot-events.js';
 import { pipelineAccess, pipelineActorOptions } from './src/pipeline-capabilities.js';
+import { attachShadowV2 } from './src/v2/shadow.js';
 import {
   InvalidProviderResponseError,
   isSuccessfulFacebookScrape,
@@ -39,7 +40,8 @@ import {
   parsePositiveNumber,
   validateFacebookUrl,
   validateKnownDuplicateKeys,
-  validateLeadRequestBody
+  validateLeadRequestBody,
+  toContractVerdict
 } from './src/validation.js';
 
 const app = express();
@@ -345,7 +347,7 @@ ALREADY-TRADING BUSINESSES ARE NOT AUTOMATICALLY BAD:
 - Prior opening or "got the keys" posts in the supplied history do not reject the lead.
   They reject it only when this post repeats the same announcement with no new premises.
 - Post age never decides the verdict. A qualifying premises event is GOOD even when the
-  post is older than 48 hours. The backend computes age separately and uses it to
+  post is old. The backend computes age separately and uses it to
   prioritise, not to reject.
 
 A PERSONAL PROFILE IS NOT AUTOMATICALLY BAD OR UNCLEAR:
@@ -506,6 +508,11 @@ function removeUnsupportedHistoryClaims(analysis, hasSample = false) {
 }
 
 async function analyzeLead(lead) {
+  const analysis = await analyzeLeadV1(lead);
+  return attachShadowV2(lead, analysis);
+}
+
+async function analyzeLeadV1(lead) {
   const contactEnrichment = enrichCotContacts(lead, lead['Search Post ID'] ? evaluateCotIdentity(lead) : undefined);
   const analysisLead = cotLeadWithContacts(lead, contactEnrichment);
   const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
@@ -655,7 +662,9 @@ export function finalizeCotAnalysis(lead, aiResponse) {
   const scrapedResult = lead?.fetchResults?.rawData || lead?.fetchResults || null;
   return {
     ...policyResponse,
-    quality_assessment: { verdict: aiResponse.verdict, reasoning: aiResponse.reasoning,
+    verdict: toContractVerdict(policyResponse.verdict),
+    ai_verdict: policyResponse.verdict,
+    quality_assessment: { verdict: toContractVerdict(aiResponse.verdict), ai_verdict: aiResponse.verdict, reasoning: aiResponse.reasoning,
       needs_manual_review: aiResponse.needs_manual_review === true, business_identity: aiResponse.business_identity },
     contact_lookup: scrapedResult?.contactLookup || { status: 'not_recorded' },
     contact_enrichment: finalContacts,

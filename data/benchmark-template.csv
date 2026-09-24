@@ -1,0 +1,3 @@
+label,deal,v1_verdict,Company Name,Industry Type,Post Code,Phone Number,Post Caption,notes
+GOOD,true,GOOD,Bean There Cafe,Cafe,M20 6RL,0161 000 0000,"We have moved to our new premises on Oak Road!",example row - replace
+BAD,false,GOOD,Tasty Bites,Restaurant,M1 1AA,,"Check out our new menu this week",example row - replace

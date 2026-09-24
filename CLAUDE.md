@@ -169,3 +169,12 @@ Designed for Render:
 - Configure all environment variables in the Render dashboard
 - No build step — runs directly with `node server.js`
 - Frontend typically on Vercel (add its origin to `ALLOWED_ORIGINS`)
+
+## Validator v2 (in progress)
+
+`src/v2/` holds the rebuild described in [docs/TECHIES_VALIDATION_SPEC_V1.md](docs/TECHIES_VALIDATION_SPEC_V1.md):
+`rules.js` (Stage 1, free), `event-classifier.js` (Stage 2, gpt-5-nano → gpt-5-mini),
+`validate.js` (separate Opportunity/Identity/Eligibility/Contact/Delivery statuses) and
+`shadow.js` (`VALIDATOR_V2_SHADOW=on` runs v2 beside v1; delivery still reads v1 only).
+Benchmark: `node scripts/v2-benchmark.mjs <labeled.csv>`; shadow diff:
+`node scripts/v2-compare-shadow.mjs <render-logs.txt>`.
