@@ -56,10 +56,17 @@ EVENT TYPES:
 - premises_search: actively looking for / viewing / in talks for new or extra premises.
 - routine_reopening: back after a break, same owner and same site.
 - same_site_expansion: bigger at the same address (knock-through, more seating, new room).
-- minor_update: menu, products, prices, decor, equipment, staff, offers.
+- minor_update: menu, products, prices, decor, equipment, staff, offers, new stock or a new
+  stockist/brand in the shop, new facilities or amenities (e.g. EV chargers), opening hours.
 - closure: closing with no continuing premises.
-- not_a_business_event: personal news, jobs, housing, general chat.
-- ambiguous: a premises event is plausible but the text does not settle it.
+- not_a_business_event: personal news, jobs or recruitment, chair/room/desk rental adverts,
+  business-for-sale listings, industry or market commentary, council/NHS/public-sector
+  facilities, events, general chat.
+- ambiguous: a premises event is plausible but the text does not settle it, or only
+  plans/proposals exist with nothing committed.
+
+A new business with no premises (mobile, home-based or online service) is ambiguous, not
+new_opening. Judge THIS post only; a business's history does not make it an event.
 
 ABOUT: "self" if the candidate business (or its owner posting personally) is the subject;
 "third_party" if the post announces a DIFFERENT named business; "unknown" if you cannot tell.

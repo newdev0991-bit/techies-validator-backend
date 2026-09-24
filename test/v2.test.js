@@ -112,3 +112,14 @@ test('benchmark scoring and shadow comparison', () => {
   const c = compare(recs);
   assert.equal(c.total, 2); assert.equal(c.agreement_pct, 50); assert.equal(c.buckets['OLD GOOD / NEW BAD'], 1);
 });
+
+test('stage 1 rejects chain openings and public-sector publishers without an Industry Type', () => {
+  const r = (name, caption) => runRules({ 'Company Name': name, fetchResults: { rawData: { postText: caption } } }).reasons;
+  assert.deepEqual(r('Visit Royal Sutton Coldfield BID', 'The new Aldi opens on Thursday 8th October'), ['known_chain_event']);
+  assert.deepEqual(r('Livingston Designer Outlet', 'Nike is officially open!'), ['known_chain_event']);
+  assert.deepEqual(r('Lydden Primary School, Dover', "We're opening our doors for parents"), ['non_commercial_publisher']);
+  assert.deepEqual(r('Royal Borough of Kensington and Chelsea', 'A new health hub has opened'), ['non_commercial_publisher']);
+  // A private business with "Academy" in its name is not a school.
+  assert.deepEqual(r('East Midlands Swimming Academy LTD', "we're opening a new pool"), []);
+  assert.deepEqual(r('Next Level Cafe', 'we are now open'), []);
+});

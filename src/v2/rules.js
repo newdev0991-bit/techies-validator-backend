@@ -31,8 +31,19 @@ const KNOWN_CHAINS = [
   'burger king', 'domino\'s', 'dominos', 'pizza hut', 'nando\'s', 'nandos', 'tesco', 'sainsbury\'s',
   'sainsburys', 'asda', 'morrisons', 'aldi', 'lidl', 'co-op', 'boots', 'superdrug', 'wetherspoon',
   'jd wetherspoon', 'pret a manger', 'caffe nero', 'toolstation', 'screwfix', 'b&m', 'home bargains',
-  'poundland', 'specsavers', 'vision express', 'timpson', 'card factory', 'savers', 'iceland'
+  'poundland', 'specsavers', 'vision express', 'timpson', 'card factory', 'savers', 'iceland',
+  'nike', 'primark', 'h&m', 'zara', 'marks & spencer', 'm&s', 'jd sports', 'sports direct',
+  'b&q', 'wickes', 'the range', 'dunelm', 'tk maxx', 'home bargains', 'pets at home', 'halfords',
+  'currys', 'argos', 'waitrose', 'pret', 'gail\'s', 'wagamama', 'five guys', 'tim hortons', 'popeyes'
 ];
+const escapeRe = v => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// "The new Aldi opens...", "Nike is officially open", "new Greggs in the retail park".
+const CHAIN_EVENT = new RegExp(`\\b(?:the new|a new|new)\\s+(?:${KNOWN_CHAINS.map(escapeRe).join('|')})\\b|\\b(?:${KNOWN_CHAINS.map(escapeRe).join('|')})\\s+(?:is|are|has|have)\\s+(?:now\\s+|officially\\s+)?(?:open|opened|opening)\\b`, 'i');
+
+// Public-sector and education publishers, judged on the name when no Industry Type
+// is supplied (search-imported leads have none). A council or school announcing a
+// facility is not a commercial premises lead.
+const NON_COMMERCIAL_NAME = /\b(?:primary school|secondary school|high school|school|sports college|college|university|academy trust|education trust|borough council|county council|city council|district council|parish council|council|london borough|royal borough|nhs|police)\b/i;
 
 const MINOR_UPDATE = /\b(?:new menu|new items?|new pricelist|price list|new services?|new offers?|new decor|new look|renovated|refurbished|new paint|new equipment|new furniture|new stand|new display|new staff|new team member|upstairs|new section|new floor)\b/i;
 const PREMISES_SEARCH = /\b(?:looking for (?:new |a new |additional )?(?:premises|unit|shop|site)|on the hunt for (?:a )?new (?:unit|premises|shop)|viewing (?:sites|units|premises)|in talks to take on)\b/i;
@@ -101,6 +112,8 @@ export function runRules(lead) {
   for (const [name, re] of PROHIBITED_INDUSTRY) if (re.test(industry)) reasons.push(`prohibited_industry:${name}`);
   const name = lc(facts.company_name).replace(/\s+(?:ltd|limited|plc)\.?$/, '').trim();
   if (name && KNOWN_CHAINS.includes(name)) reasons.push('known_chain');
+  if (CHAIN_EVENT.test(captionOf(lead))) reasons.push('known_chain_event');
+  if (!industry && NON_COMMERCIAL_NAME.test(facts.company_name)) reasons.push('non_commercial_publisher');
   if (['historical_event_only', 'personal_or_employment_move', 'recruitment_only'].includes(facts.event_rule_reason)) {
     reasons.push(`excluded_event:${facts.event_rule_reason}`);
   }
